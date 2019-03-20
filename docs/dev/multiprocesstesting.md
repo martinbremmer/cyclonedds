@@ -87,7 +87,7 @@ it was decided to go in the following direction.
   [1.5]
 
 This results in the following concept files. Please keep in mind that they are
-very preliminary and many details will probably change when actually
+very preliminary and many details will probably change or added when actually
 implementing.<br>
 But it should provide the bigger picture of where we'd like to go.
 
@@ -98,80 +98,109 @@ bite sized chunks when possible.
 ```cpp
 #include "mpt/mpt.h" // Multi-Process-Tests framework
 
-// These environment variables will be exported before a test process starts.
-mpt_env_var_t environ_A_1[] = {
-  { "CYCLONE_URI", "..." },
-  { "PERMISSIONS", "..." },
-  { "GOVERNANCE",  "..." },
-  ...
-  { NULL,          NULL  }
-};
-mpt_env_var_t environ_A_2[] = {
-  { "CYCLONE_URI", "..." },
-  { "PERMISSIONS", "..." },
-  { "GOVERNANCE",  "..." },
-  ...
-  { NULL,          NULL  }
-};
-// A process can be started sequentially with the different environments.
-// This makes it easier to use tests that do the same in essence. Just
-// using slightly different settings.
-mpt_env_var_t *environmentsA[] = {
-  environ_A_1,
-  environ_A_2,
-  NULL
-};
-
-// A different process can be started with different environments.
-// When processA is started with an environment on index 1, then
-// processB will start with the environment on index 1 as well.
-mpt_env_var_t environ_B_1[] = { ... };
-mpt_env_var_t environ_B_2[] = { ... };
-mpt_env_var_t *environmentsB[] = {
-  environ_B_1,
-  environ_B_2,
-  NULL
-};
-
-// A 'generic' setup/teardown for processes is possible.
 //
-// The *env will contain the environment variables that are currently used to 
-// execute this process. This means that the environments arrays are not only
-// used the set environment variables, but can also be used to add variables
-// to the test itself. That could be anything, like a topic name or whatever.
-int setup(mpt_env_var_t *env)
+// Test suitename_testname_A
+// A simple test that starts two processes
+//
+
+// This process is part of test suitename_testname_A.
+MPT_Process(suitename, testname_A, process_A)
+{
+    // Do stuff
+    ...
+
+    // The test processes will use asserts to indicate success/failures.
+    MPT_ASSERT(1, "The problem is: %s", "existential crisis");
+
+    // No need to return anything, that's handled by the assert calls.
+}
+
+// This process is part of test suitename_testname_A and will be executed
+// in parallel with suitename_testname_A::process_A.
+MPT_Process(suitename, testname_A, process_B)
+{
+    ...
+}
+
+
+
+//
+// Test suitename_testname_B
+// Multiple tests within one file is possible.
+// This test has three processes.
+//
+
+// You can provide an environment to your process.
+// These system environment variables will be exported when a process starts.
+mpt_env_var_t environment_1[] = {
+  { "CYCLONEDDS_URI", "file://config1.xml" },
+  { "PERMISSIONS", "..." },
+  { "GOVERNANCE",  "..." },
+  ...
+  { NULL,          NULL  }
+};
+MPT_Process(suitename, testname_B, process_A, .environments=environment_1)
+{
+    ...
+}
+
+// Another process can use the same environment.
+MPT_Process(suitename, testname_B, process_B, .environments=environment_1)
+{
+    ...
+}
+
+// Another process within the test can use a different environment.
+mpt_env_var_t environment_2[] = {
+  { "CYCLONEDDS_URI", "file://config2.xml" },
+  { "PERMISSIONS", "..." },
+  { "GOVERNANCE",  "..." },
+  ...
+  { NULL,          NULL  }
+};
+MPT_Process(suitename, testname_B, process_C, .environments=environment_2)
+{
+    ...
+}
+
+
+
+//
+// Test suitename_testname_C
+// You can also have a test with one process, but why would you do that?
+//
+
+// Other process fixtures are also possible
+void setup(void)
 {
     // Do stuff like setting up readers/writers, registering log callback, etc.
-    return 0; // indicate success
 }
 void teardown(void)
 {
     // Do stuff like closing reader/writers, etc.
 }
-
-// Now we can provide processes to our test.
-//
-// A test is identified by the suitename/testname combination.
-// All processes of a test will be executed in parallel. All the processes
-// will be started with the environment on the same index of their
-// respective environments array.
-MPT_Process(suitename, testname, processnameA, *env, .environments=environmentsA, .init=setup, .fini=teardown, .timeout=10)
+MPT_Process(suitename, testname_C, only_process, .init=setup, .fini=teardown, .timeout=10)
 {
-    // Wait for another process to reach a state.
-    // This feature will not be available in the first iteration of the
-    // integration tests framework but implemented when the need arises.
-    mpt_waitfor(processnameB, "continue");
-
-    // The test processes will use asserts to indicate success/failures.
-    MPT_ASSERT(1, "some info: %s", "blaat");
-
-    // No need to return anything, that's handled by the assert calls.
+    ...
 }
 
-MPT_Process(suitename, testname, processnameB, *env, .environments=environmentsB, .init=setup, .fini=teardown, .timeout=10)
+
+
+//
+// Test suitename_testname_D
+// Processes within a test can communicate, for instance to sync.
+//
+MPT_Process(suitename, testname_D, process_1, .environments=environment_1, .timeout=10)
+{
+    // Wait for another process to reach a state.
+    mpt_waitfor(process_2, "continue");
+    ...
+}
+
+MPT_Process(suitename, testname_D, process_2, .environments=environment_2, .timeout=10)
 {
     mpt_send("continue");
-    MPT_ASSERT(1, "some other info");
+    ...
 }
 ```
 
