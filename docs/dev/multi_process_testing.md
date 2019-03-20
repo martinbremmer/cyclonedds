@@ -13,9 +13,10 @@ needed.
 ## Requirements
 1.1) Be able to test features using multiple processes.
 
-1.2) Should be buildable and runnable on multiple platforms including the ones
-     used in the continues integration context (when they support the features
-     needed for these tests like process creation).
+1.2) Should be buildable and runnable on multiple platforms (like windows,
+     linux, mac, etc) including the ones used in the continues integration
+     context (when they support the features needed for these tests like
+     process creation).
 
 1.3) Results should be easily analyzable within the continues integration
      context and when running locally.
@@ -50,8 +51,12 @@ localhost.
 
 
 ## Intentions
-After a discussion with a few people (different people in different meetings),
-it was decided to go in the following direction.
+There doesn't seem to be a 3rd party test framework that addresses our
+requirements in a satisfactory manner.
+
+After some discussions with a few people (different people in different
+meetings), it was decided to create our own framework and to go in the
+following direction:
 
 - Process creation/destruction/etc is (re)introduced in the ddsrt. It will be
   stripped down versions of the code from Vortex OpenSplice.<br>
