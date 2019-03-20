@@ -26,8 +26,7 @@ This document can be removed when DDS Security has been implemented.
 - [Data Tags (optional)](#datatags)
 
 
-<a name="testing" />
-## Multi process testing (in progress)
+## Multi process testing (in progress)<a name="testing" />
 
 To properly test DDS Security, multi process testing will be necessary.
 This is not yet available in Cyclone DDS.
@@ -35,24 +34,21 @@ See the [Multi Process Testing](multi_process_testing.md) document for
 more information.
 
 
-<a name="loading" />
-## Runtime library loading
+## Runtime library loading<a name="loading" />
 
 The ddsi component needs to be able to load DDS Security plugins at runtime.
 These plugins are provided as libraries.<br>
 Loading libraries at runtime is currently not possible in Cyclone DDS.
 
 
-<a name="hopscotch" />
-## Hopscotch utility (done)
+## Hopscotch utility (done)<a name="hopscotch" />
 
 This hash table is used by the Security plugins.<br>
 Both versions on OpenSplice and Cyclone are equivalent.<br>
 No additional effort is expected.
 
 
-<a name="fsm" />
-## FSM utility
+## FSM utility<a name="fsm" />
 
 The Finite State Machine utility has been introduced in OpenSplice to support
 the handshake of DDS Security.<br>
@@ -65,8 +61,7 @@ porting.
 The related DBTs should also be ported to Cyclone unit tests.
 
 
-<a name="port-api" />
-## Port DDS Security plugin API
+## Port DDS Security plugin API<a name="port-api" />
 
 The DDS Security plugin API are just a few header files. The ddsi component
 uses that to link against. The implementation of the API is done in the
@@ -81,8 +76,7 @@ Maybe add some CMake module for both ddsi and the plugins to easily link
 against?
 
 
-<a name="deserializing" />
-## De-Serializing in DDSI
+## De-Serializing in DDSI<a name="deserializing" />
 
 DDSI needs to be able to (de)serialize a few Security messages. In OpenSplice,
 some functionality of the database is used. This is unavailable in Cyclone.
@@ -95,8 +89,7 @@ the m_ops sequences, message structs (if not yet available) and some
 convenience functions using both.
 
 
-<a name="port-plugins" />
-## Port DDS Security builtin plugins
+## Port DDS Security builtin plugins<a name="port-plugins" />
 
 No major changes between the DDS Security plugins in OpenSplice and Cyclone
 are expected.
@@ -116,8 +109,7 @@ This means some additional effort, compared to just a code drop. But it is not
 expected to be major.
 
 
-<a name="port-ddsi" />
-## Port DDSI DDS Security
+## Port DDSI DDS Security<a name="port-plugins" />
 
 There is already quite a bit of difference between the DDSI codebases in
 OpenSplice and Cyclone. So, the copy/merge of the DDSI Security code from
@@ -147,8 +139,7 @@ logic have to be ported from scripts and applications to that new framework.
 That porting shouldn't be that hard. However, it will probably take a while.
 
 
-<a name="Move-configuration" />
-## Move configuration
+## Move configuration<a name="Move-configuration" />
 
 After the port, the DDS Security configuration is still (partly) done through
 the overall configuration XML file (rest is coming from the permissions and
@@ -204,8 +195,7 @@ tests have to be updated, or a few added (that test security configuration
 through QoS).
 
 
-<a name="failures" />
-## Failure handling
+## Failure handling<a name="failures" />
 
 Currently, when an local action is tried that isn't allowed by DDS Security
 (like creating a participant when it's not permitted), DDSI is shut down.<br>
@@ -223,8 +213,7 @@ Maybe we have to do some additional cleanup when a failure is encountered.
 Some tests probably have to be adjusted for the new behaviour.
 
 
-<a name="multiple-configurations" />
-## Multiple configurations
+## Multiple configurations<a name="multiple-configurations" />
 
 Currently (because it's done through the overall XML configuration), only one
 DDS Security configuration could be supported. Because of this fact, at various
@@ -269,21 +258,18 @@ Tests have to be added to make sure that a setup with different Security
 configurations works.
 
 
-<a name="example" />
-## Example
+## Example<a name="example" />
 
 A Security example has to be added.
 
 
-<a name="qosprovider" />
-## QosProvider
+## QosProvider<a name="qosprovider" />
 
 The Participant QoS now contains Security related information. This means that
 the QosProvider has to be upgraded to support that.
 
 
-<a name="datatags" />
-## Data Tags (optional)
+## Data Tags (optional)<a name="datatags" />
 
 The specification is somewhat fuzzy about the data tags.
 
