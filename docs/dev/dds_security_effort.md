@@ -109,7 +109,7 @@ This means some additional effort, compared to just a code drop. But it is not
 expected to be major.
 
 
-## Port DDSI DDS Security<a name="port-plugins" />
+## Port DDSI DDS Security<a name="port-ddsi" />
 
 There is already quite a bit of difference between the DDSI codebases in
 OpenSplice and Cyclone. So, the copy/merge of the DDSI Security code from
@@ -148,8 +148,12 @@ different pull requests. Examples are
 - Add DDS Security endpoint that is volatile. This change has more impact than
   all the non-volatile endpoints combined.
 - Validate local participants and endpoints.
-- Handshake
-- etc
+- Handshake.
+- Payload (en)(de)coding.
+- Submsg (en)(de)coding.
+- RTPSmsg (en)(de)coding.
+- Etc
+
 
 
 ## Move configuration<a name="Move-configuration" />
