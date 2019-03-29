@@ -105,6 +105,7 @@ bite sized chunks when possible.
 
 //
 // Test suitename_testname_A
+//
 // A simple test that starts two processes
 //
 
@@ -131,18 +132,20 @@ MPT_Process(suitename, testname_A, process_B)
 
 //
 // Test suitename_testname_B
+//
 // Multiple tests within one file is possible.
-// This test has three processes.
+// This test has three processes with various environments.
 //
 
-// You can provide an environment to your process.
 // These system environment variables will be exported when a process starts.
-mpt_env_var_t environment_1[] = {
-  { "CYCLONEDDS_URI", "file://config1.xml" },
-  { "PERMISSIONS", "..." },
-  { "GOVERNANCE",  "..." },
-  ...
-  { NULL,          NULL  }
+mpt_env_t environment_1[] = {
+  NULL,
+  {
+    { "CYCLONEDDS_URI", "file://config1.xml"     },
+    { "PERMISSIONS",    "file://permissions.p7s" },
+    { "GOVERNANCE",     "file://governance.p7s"  },
+    { NULL,             NULL                     }
+  }
 };
 MPT_Process(suitename, testname_B, process_A, .environments=environment_1)
 {
@@ -156,12 +159,15 @@ MPT_Process(suitename, testname_B, process_B, .environments=environment_1)
 }
 
 // Another process within the test can use a different environment.
-mpt_env_var_t environment_2[] = {
-  { "CYCLONEDDS_URI", "file://config2.xml" },
-  { "PERMISSIONS", "..." },
-  { "GOVERNANCE",  "..." },
-  ...
-  { NULL,          NULL  }
+mpt_env_t environment_2[] = {
+  NULL,
+  {
+    { "CYCLONEDDS_URI", "file://config2.xml"     },
+    { "PERMISSIONS",    "file://permissions.p7s" },
+    { "GOVERNANCE",     "file://governance.p7s"  },
+    { "ANOTHER_VALUE",  "..."                    },
+    { NULL,             NULL                     }
+  }
 };
 MPT_Process(suitename, testname_B, process_C, .environments=environment_2)
 {
@@ -172,19 +178,40 @@ MPT_Process(suitename, testname_B, process_C, .environments=environment_2)
 
 //
 // Test suitename_testname_C
-// You can also have a test with one process, but why would you do that?
+//
+// The two environments in the previous example are partly the same.
+// It's possible to inherit environments. The following test is actually
+// the same as the previous one.
 //
 
-// Other process fixtures are also possible
-void setup(void)
+mpt_env_t environment_default[] = {
+  NULL,                          /* inheritance */
+  {
+    { "CYCLONEDDS_URI", "file://config1.xml"     },
+    { "PERMISSIONS",    "file://permissions.p7s" },
+    { "GOVERNANCE",     "file://governance.p7s"  },
+    { NULL,             NULL  }
+  }
+};
+MPT_Process(suitename, testname_C, process_A, .environments=environment_default)
 {
-    // Do stuff like setting up readers/writers, registering log callback, etc.
+    ...
 }
-void teardown(void)
+MPT_Process(suitename, testname_C, process_B, .environments=environment_default)
 {
-    // Do stuff like closing reader/writers, etc.
+    ...
 }
-MPT_Process(suitename, testname_C, only_process, .init=setup, .fini=teardown, .timeout=10)
+
+// Inherit default environment, overrule one value and add another.
+mpt_env_t environment_3[] = {
+  environment_default,       /* inheritance */
+  {
+    { "CYCLONEDDS_URI", "file://config2.xml" },
+    { "ANOTHER_VALUE",  "..."                },
+    { NULL,             NULL                 }
+  }
+};
+MPT_Process(suitename, testname_C, process_C, .environments=environment_3)
 {
     ...
 }
@@ -193,23 +220,73 @@ MPT_Process(suitename, testname_C, only_process, .init=setup, .fini=teardown, .t
 
 //
 // Test suitename_testname_D
-// Processes within a test can communicate, for instance to sync.
 //
-MPT_Process(suitename, testname_D, process_1, .environments=environment_1, .timeout=10)
+// Other process fixtures are also possible.
+// This test has just one process, but why would you do that normally?
+//
+
+void setup(void)
 {
-    // Wait for another process to reach a state.
-    mpt_waitfor(process_2, "continue");
+    // Do stuff like setting up readers/writers, registering log callback, etc.
+}
+void teardown(void)
+{
+    // Do stuff like closing reader/writers, etc.
+}
+MPT_Process(suitename, testname_D, only_process, .init=setup, .fini=teardown, .timeout=10)
+{
     ...
 }
 
-MPT_Process(suitename, testname_D, process_2, .environments=environment_2, .timeout=10)
+
+
+//
+// Test suitename_testname_E
+//
+// Processes within a test can communicate, for instance to sync.
+//
+
+MPT_Process(suitename, testname_E, process_1)
 {
-    mpt_send("continue");
+    // Wait for another process to reach a state.
+    mpt_waitfor("process_2_started");
     ...
+}
+
+MPT_Process(suitename, testname_E, process_2)
+{
+    mpt_send("process_2_started");
+    ...
+}
+
+MPT_Process(suitename, testname_E, process_3)
+{
+    mpt_waitfor("process_2_started");
+    ...
+}
+
+
+
+//
+// Test suitename_testname_F
+//
+// If you want to call a function from your process that can use MPT_ASSERTs, then that
+// function has to have a syntax including MPT_ProcessArgsSyntax.
+//
+
+static void some_function(MPT_ProcessArgsSyntax, const char *text)
+{
+    MPT_ASSERT(1, text);
+}
+
+MPT_Process(suitename, testname_F, process)
+{
+    some_function(MPT_ProcessArgs, "placeholder")
 }
 ```
 
 ##### MultiProcessTest header mpt.h
+Ignoring special Windows macro tricks for clarity.
 ```cpp
 #ifndef MPT_H_INCLUDED
 #define MPT_H_INCLUDED
@@ -219,50 +296,126 @@ typedef struct {
     const char *value;
 } mpt_env_var_t;
 
+typedef struct mpt_env_ {
+    struct mpt_env_ *parent;
+    mpt_env_var_t vars[];
+} mpt_env_t;
+
 typedef enum {
   MPT_SUCCESS = 0,
   MPT_FAILURE
-  /* FIXME: More specific errors can at some point be introduced. A good
-            example (maybe even use the values) would be sysexits.h. */
 } mpt_retval_t;
 
-typedef struct {
-  //
-  // FIXME: implement
-  //   - the socket to use for synchronization (could just be a pipe or
-  //       something too)...
-  //
-  //
-} mpt_args_t;
+typedef void(*mpt_process_init_func_t)(void);
+typedef void(*mpt_process_fini_func_t)(void);
 
-typedef void(*mpt_test_t)(
-  const mpt_args_t *mpt__args__, mpt_retval_t *mpt__retval__, mpt_env_var_t *env);
+typedef struct {
+    mpt_process_init_func_t init;
+    mpt_process_fini_func_t fini;
+    mpt_env_t *environment;
+} mpt_data_t;
+
+
+int mpt_patmatch(const char *pat, const char *str);
+void mpt_export_env(const mpt_env_t *env);
+
+#define MPT_ProcessArgs     mpt__args__, mpt__retval__
+#define MPT_ProcessArgsSyntax \
+    const mpt_data_t *mpt__args__, mpt_retval_t *mpt__retval__
+
+#define MPT_ProcessName(suite, test, process) \
+  MPT_Process__ ## suite ## _ ## test ## _ ## process
+
+#define MPT_ProcessProxyName(suite, test, process) \
+  MPT_Process_Proxy__ ## suite ## _ ## test ## _ ## process
+
+#define MPT_ProcessDeclaration(suite, test, process) \
+void MPT_ProcessName(suite, test, process) (MPT_ProcessArgsSyntax)
+
+#define MPT_ProcessProxyDeclaration(suite, test, process) \
+void MPT_ProcessProxyName(suite, test, process) (MPT_ProcessArgsSyntax)
+
+
 
 //
 // MPT_Process signature
 //
-// this is used by cmake to recognize a given test
-// it's expanded to a function signature.. this will be added to the list
-//   ..
-#define MPT_Process(suite, test, process) \
-  MPT__ ## suite ## _ ## test ## _ ## process ( \
-    const mpt_args_t *mpt__args__, mpt_retval_t *mpt__retval__, mpt_env_var_t *env)
+// This is used by cmake to recognize a given process and to which test
+// it belongs.
+// It's expanded to a function signature. This will be added to a list
+// and executed by the runner generated by cmake.
+//
+#define MPT_Process(suite, test, process, ...)             \
+  static MPT_ProcessDeclaration(suite, test, process);     \
+                                                           \
+  MPT_ProcessProxyDeclaration(suite, test, process) {      \
+    mpt_data_t data = MPT_Fixture(__VA_ARGS__);            \
+                                                           \
+    mpt_export_env(data.environment);                      \
+                                                           \
+    if (data.init != NULL) {                               \
+      data.init();                                         \
+    }                                                      \
+                                                           \
+    MPT_ProcessName(suite, test, process)                  \
+                            (mpt__args__, mpt__retval__);  \
+                                                           \
+    if (data.fini != NULL) {                               \
+      data.fini();                                         \
+    }                                                      \
+  }                                                        \
+                                                           \
+  static MPT_ProcessDeclaration(suite, test, process)
 
+
+
+//
+// MPT_ASSERT
+//
 #define MPT__ASSERT__(cond, ...) \
   do { \
     if (!(cond)) { \
       if (*mpt__retval__ == MPT_SUCCESS) { \
         *mpt__retval__ = MPT_FAILURE; \
       } \
-      mpt_printf(__VA_ARGS__); \
+      printf(__VA_ARGS__); \
+      printf("\n"); \
     } \
-  } while (0)
+  } while(0)
 
-// supports printing a message...
-// so could be written as MPT_ASSERT(a != b, "foo: %s\n", "bar")
-// or: MPT_ASSERT(a != b)
+#define MPT__ASSERT_FATAL__(cond, ...) \
+  do { \
+    if (!(cond)) { \
+      if (*mpt__retval__ == MPT_SUCCESS) { \
+        *mpt__retval__ = MPT_FAILURE; \
+      } \
+      printf(__VA_ARGS__); \
+      printf("\n"); \
+      return; \
+    } \
+  } while(0)
+
 #define MPT_ASSERT(...) \
   MPT__ASSERT__(__VA_ARGS__)
+
+#define MPT_ASSERT_FATAL(...) \
+  MPT__ASSERT_FATAL__(__VA_ARGS__)
+
+
+
+//
+// Expand the process fixtures.
+//
+#define MPT_Comma() ,
+#define MPT_Reduce(one, ...) one
+
+#define MPT_Fixture__(throw, away, value, ...) value
+
+#define MPT_Fixture(...) \
+  MPT_Fixture_( MPT_Comma MPT_Reduce(__VA_ARGS__,) (), __VA_ARGS__ )
+
+#define MPT_Fixture_(throwaway, ...) \
+  MPT_Fixture__(throwaway, ((mpt_data_t){ 0 }), ((mpt_data_t){ __VA_ARGS__ }))
 
 #endif /* MPT_H_INCLUDED */
 ```
@@ -280,95 +433,144 @@ typedef void(*mpt_test_t)(
 //       - process  |- these are all managed a single runner*
 //       - process  /
 //
-// *the runner forks the processes and ensures that they're passed the right
-//  environment variables and arguments etc
-//  >> maybe it'll open up the communication socket to
-//  >> at least it handles all the communication between the various processes
-//    >> or synchronization really... it'll probably just use select... but we
-//       could use e.g. epoll on linux, kqueue on macOS and waitforsingleobject
-//       on windows...
-//  >> it also waits for all the processes to terminate... fetch their exit
-//     codes... ensure their logs are properly written
-//  >> cleans up if the process fails
-//  >> so actually... also creates a working directory... maybe even chroots
-//     the process and whatnot!
+// *The runner
+//     - starts the processes and ensures that they're passed the right
+//       environment variables.
+//     - maybe open up the communication socket, pipe or something else
+//       to facilitate the IPC between the child processes.
+//     - waits for all processes to terminate and fetch their exit codes.
+//     - determines test result according to process results.
+//     - cleans up if the process fails.
+//     - could possibly do additional stuff like creating a working
+//       directory of even chroots the process and whatnot.
 //
 
-typedef struct {
-  //
-  // function
-  // name of the process
-  //
-  //// must have some arguments.... ////
-  //
-  //
-  //
-} mpt_proc_t;
+typedef void(*mpt_func_proc_t)(
+  const mpt_data_t *mpt__args__, mpt_retval_t *mpt__retval__);
 
-typedef struct {
-  //
-  //
-  //
+typedef struct mpt_process_ {
+    const char* name;
+    ddsrt_pid_t pid;
+    mpt_func_proc_t process;
+    struct mpt_process_ *next;
+} mpt_process_t;
+
+typedef struct mpt_test_ {
+    const char* name;
+    mpt_process_t *procs;
+    struct mpt_test_ *next;
 } mpt_test_t;
 
-typedef struct {
-  //
+typedef struct mpt_suite_ {
+    const char* name;
+    mpt_test_t *tests;
+    struct mpt_suite_ *next;
 } mpt_suite_t;
 
+//
+// Imagine support functions to allocate structures, add them to the
+// suite/test tree, find specific tests/processes, free stuff, etc.
+//
+// The calls to create and add the structures will be generated
+// by cmake.
+//
 
 //
+// Then we have the actual test runner.
 //
+// It'll take the suite and test. Then it'll start every process of
+// that test by restarting this application (identified by exe) a few
+// times with the proper arguments to identify those processes.
 //
-int testwrapper(int argc, char *argv[])
+static int
+mpt_run_test(const char *exe, mpt_suite_t *suite, mpt_test_t *test)
 {
-  //
-  // this little wrapper function is actually executed into
-  //   fork > exec > enters this function
-  // this also sets the name of the test process currently executing...
-  //
-  mpt_retval_t rv = MPT_SUCCESS;
+    char *argv[] = { NULL, NULL,   NULL, NULL,   NULL, NULL,   NULL, NULL };
+    mpt_process_t *proc;
 
-  //
-  // based on certain input it would open-up a socket to the control process
-  // which advertises where it can connect! it would specifically not connect
-  // on a peer-to-peer base
-  //
+    argv[0] = "-s";
+    argv[1] = (char*)suite->name;
+    argv[2] = "-t";
+    argv[3] = (char*)test->name;
 
-  return (int)rv;
+    /* Start the processes. */
+    proc = test->procs;
+    while (proc) {
+        argv[4] = "-p";
+        argv[5] = (char*)proc->name;
+        ddsrt_process_create(exe, argv, &proc->pid);
+        proc = proc->next;
+    }
+    /* Wait for the processes. */
+    while (not_timeout && not_all_procs_stopped) {
+        proc = test->procs;
+        while (proc) {
+            int32_t status;
+            if (get_process_exit_code(proc->pid, &status) == DDS_RETCODE_OK) {
+                Determine test result succes/fail according to status.
+            }
+            proc = proc->next;
+        }
+        dds_sleepfor(DDS_MSECS(50));
+    }
+    if (not_all_procs_stopped) {
+        Kill remaining child processes.
+    }
+    return result;
+}
+static int
+mpt_run_tests(const char *exe, const char *spattern, const char *tpattern)
+{
+    while (run through the suite/test tree) {
+        if (suite/test in tree matches the patterns) {
+            mpt_run_test(exe, suite, test);
+        }
+    }
 }
 
-bool mpt_suite_exists(const char *suite)
+//
+// When indicated, we should only call entry function of the given process.
+//
+static int
+mpt_run_proc(mpt_process_t *proc)
 {
-  // dummy implementation of course!
-  return (suite == NULL);
+    mpt_retval_t retval = MPT_SUCCESS;
+    mpt_data_t   args;
+    proc->process(&args, &retval);
+    return (retval == MPT_SUCCESS) ? EXIT_SUCCESS : EXIT_FAILURE;
+}
+static int
+mpt_run_procs(const char *spattern, const char *tpattern, const char *ppattern)
+{
+    while (run through the suite/test/processes tree) {
+        if (suite/test/process in tree matches the patterns) {
+            mpt_run_proc(proc);
+        }
+    }
 }
 
-void mpt_add_suite(
-  const char *suite)
+//
+// The main() determines if it should run test(s) or call
+// an process entry function.
+//
+int main(int argc, char *argv[])
 {
-  if (!mpt_suite_exists(suite)) {
-    //suite = strdup(suite);
-  }
-}
+    Parse options.
 
-void mpt_add_test(
-  const char *suite,
-  const char *test)
-{
-  // x. add a new test to the suite if it does not exist
-  assert(suite != NULL);
-  assert(test != NULL);
-}
+    // Generated by cmake
+    Add suites.
+    Add tests to proper suites.
+    Add processes to proper tests.
+    // Generated by cmake
 
-void mpt_add_process(
-  const char *suite,
-  const char *test,
-  const char *process,
-  mpt_test_t func)
-{
-  //
-  // x. add a new process to an existing testcase
-  //    .. this'll form a list that's started and watched by a given runner
-  //
+    if (no process selected) {
+        /* Run test(s). */
+        result = mpt_run_tests(argv[0], opts.suite, opts.test);
+    } else {
+        /* Run process(es). */
+        result = mpt_run_procs(opts.suite, opts.test, opts.process);
+    }
+
+    return result;
 }
 ```
