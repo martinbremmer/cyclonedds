@@ -138,7 +138,7 @@ MPT_Process(suitename, testname_A, process_B)
 //
 
 // These system environment variables will be exported when a process starts.
-mpt_env_t environment_1[] = {
+mpt_env_t environment_1 = {
   NULL,
   {
     { "CYCLONEDDS_URI", "file://config1.xml"     },
@@ -147,19 +147,19 @@ mpt_env_t environment_1[] = {
     { NULL,             NULL                     }
   }
 };
-MPT_Process(suitename, testname_B, process_A, .environments=environment_1)
+MPT_Process(suitename, testname_B, process_A, .environment=environment_1)
 {
     ...
 }
 
 // Another process can use the same environment.
-MPT_Process(suitename, testname_B, process_B, .environments=environment_1)
+MPT_Process(suitename, testname_B, process_B, .environment=environment_1)
 {
     ...
 }
 
 // Another process within the test can use a different environment.
-mpt_env_t environment_2[] = {
+mpt_env_t environment_2 = {
   NULL,
   {
     { "CYCLONEDDS_URI", "file://config2.xml"     },
@@ -169,7 +169,7 @@ mpt_env_t environment_2[] = {
     { NULL,             NULL                     }
   }
 };
-MPT_Process(suitename, testname_B, process_C, .environments=environment_2)
+MPT_Process(suitename, testname_B, process_C, .environment=environment_2)
 {
     ...
 }
@@ -184,7 +184,7 @@ MPT_Process(suitename, testname_B, process_C, .environments=environment_2)
 // the same as the previous one.
 //
 
-mpt_env_t environment_default[] = {
+mpt_env_t environment_default = {
   NULL,                          /* inheritance */
   {
     { "CYCLONEDDS_URI", "file://config1.xml"     },
@@ -193,17 +193,17 @@ mpt_env_t environment_default[] = {
     { NULL,             NULL  }
   }
 };
-MPT_Process(suitename, testname_C, process_A, .environments=environment_default)
+MPT_Process(suitename, testname_C, process_A, .environment=environment_default)
 {
     ...
 }
-MPT_Process(suitename, testname_C, process_B, .environments=environment_default)
+MPT_Process(suitename, testname_C, process_B, .environment=environment_default)
 {
     ...
 }
 
 // Inherit default environment, overrule one value and add another.
-mpt_env_t environment_3[] = {
+mpt_env_t environment_3 = {
   environment_default,       /* inheritance */
   {
     { "CYCLONEDDS_URI", "file://config2.xml" },
@@ -211,7 +211,7 @@ mpt_env_t environment_3[] = {
     { NULL,             NULL                 }
   }
 };
-MPT_Process(suitename, testname_C, process_C, .environments=environment_3)
+MPT_Process(suitename, testname_C, process_C, .environment=environment_3)
 {
     ...
 }
@@ -281,7 +281,7 @@ static void some_function(MPT_ProcessArgsSyntax, const char *text)
 
 MPT_Process(suitename, testname_F, process)
 {
-    some_function(MPT_ProcessArgs, "placeholder")
+    some_function(MPT_ProcessArgs, "placeholder");
 }
 ```
 
@@ -445,6 +445,9 @@ void MPT_ProcessProxyName(suite, test, process) (MPT_ProcessArgsSyntax)
 //       directory of even chroots the process and whatnot.
 //
 
+//
+// The structures to setup a suite-test-process tree.
+//
 typedef void(*mpt_func_proc_t)(
   const mpt_data_t *mpt__args__, mpt_retval_t *mpt__retval__);
 
@@ -478,9 +481,13 @@ typedef struct mpt_suite_ {
 //
 // Then we have the actual test runner.
 //
-// It'll take the suite and test. Then it'll start every process of
-// that test by restarting this application (identified by exe) a few
-// times with the proper arguments to identify those processes.
+// It'll take a suite and test. Then it'll start every process of
+// that test by restarting this application (identified by exe) a
+// few times with the proper arguments to identify those processes.
+//
+// To get the main() to call the proper process entry function, it
+// needs to be able to identify the suite, test and process. This is
+// done by the supplying -s(uite), -t(est) and -p(rocess) arguments.
 //
 static int
 mpt_run_test(const char *exe, mpt_suite_t *suite, mpt_test_t *test)
@@ -529,7 +536,8 @@ mpt_run_tests(const char *exe, const char *spattern, const char *tpattern)
 }
 
 //
-// When indicated, we should only call entry function of the given process.
+// When indicated, in the main(), we should only call the entry function
+// of a given process.
 //
 static int
 mpt_run_proc(mpt_process_t *proc)
