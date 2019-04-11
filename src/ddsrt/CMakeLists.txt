@@ -73,6 +73,7 @@ list(APPEND headers
 list(APPEND sources
   "${source_path}/io.c"
   "${source_path}/log.c"
+  "${source_path}/environ.c"
   "${source_path}/retcode.c"
   "${source_path}/strtod.c"
   "${source_path}/strtol.c")
