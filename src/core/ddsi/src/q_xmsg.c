@@ -387,6 +387,13 @@ static int submsg_is_compatible (const struct nn_xmsg *msg, SubmessageKind_t smk
         case SMID_DATA: case SMID_DATA_FRAG:
           /* but data is strictly verboten */
           return 0;
+        case SMID_SEC_BODY:
+        case SMID_SEC_PREFIX:
+        case SMID_SEC_POSTFIX:
+        case SMID_SRTPS_PREFIX:
+        case SMID_SRTPS_POSTFIX:
+          /* and the security sm are basically data. */
+          return 0;
       }
       assert (0);
       break;
@@ -407,6 +414,13 @@ static int submsg_is_compatible (const struct nn_xmsg *msg, SubmessageKind_t smk
              ensure rexmits have only one data submessages -- the test
              won't work for initial transmits, but those currently
              don't allow a readerId */
+          return msg->kindspecific.data.readerId_off == 0;
+        case SMID_SEC_BODY:
+        case SMID_SEC_PREFIX:
+        case SMID_SEC_POSTFIX:
+        case SMID_SRTPS_PREFIX:
+        case SMID_SRTPS_POSTFIX:
+          /* Just do the same as 'normal' data sm. */
           return msg->kindspecific.data.readerId_off == 0;
         case SMID_ACKNACK:
         case SMID_HEARTBEAT:
@@ -758,18 +772,22 @@ void nn_xmsg_setwriterseq_fragid (struct nn_xmsg *msg, const nn_guid_t *wrguid, 
   msg->kindspecific.data.wrfragid = wrfragid;
 }
 
-size_t nn_xmsg_add_string_padded(unsigned char *buf, char *str)
+size_t nn_xmsg_add_string_padded(unsigned char *buf, char *str, bool forceBE)
 {
-  size_t len = strlen (str) + 1;
-  assert (len <= UINT32_MAX);
+  unsigned len = 0;
+  if (str) {
+    len = (unsigned) strlen (str) + 1;
+  }
   if (buf) {
     /* Add cdr string */
     struct cdrstring *p = (struct cdrstring *) buf;
-    p->length = (uint32_t)len;
-    memcpy (p->contents, str, len);
-    /* clear padding */
-    if (len < align4u (len)) {
-      memset (p->contents + len, 0, align4u (len) - len);
+    p->length = (uint32_t)(forceBE ? toBE4u(len) : len);
+    if (str) {
+      memcpy (p->contents, str, len);
+      /* clear padding */
+      if (len < align4u (len)) {
+        memset (p->contents + len, 0, align4u (len) - len);
+      }
     }
   }
   len = 4 +           /* cdr string len arg + */
@@ -777,12 +795,12 @@ size_t nn_xmsg_add_string_padded(unsigned char *buf, char *str)
   return len;
 }
 
-size_t nn_xmsg_add_octseq_padded(unsigned char *buf, nn_octetseq_t *seq)
+size_t nn_xmsg_add_octseq_padded(unsigned char *buf, nn_octetseq_t *seq, bool forceBE)
 {
   unsigned len = seq->length;
   if (buf) {
     /* Add cdr octet seq */
-    *((unsigned *)buf) = len;
+    *((unsigned *)buf) = forceBE ? toBE4u(len) : len;
     buf += sizeof (int);
     memcpy (buf, seq->value, len);
     /* clear padding */
@@ -794,7 +812,96 @@ size_t nn_xmsg_add_octseq_padded(unsigned char *buf, nn_octetseq_t *seq)
          align4u(len); /* seqlen + possible padding */
 }
 
-void * nn_xmsg_addpar (struct nn_xmsg *m, unsigned pid, size_t len)
+unsigned nn_xmsg_add_propertyseq_padded (unsigned char *buf, const struct nn_propertyseq *ps, bool forceBE)
+{
+  unsigned i, len, n = 0;
+  unsigned *cnt = NULL;
+
+  assert(ps);
+
+  /* Get the address, within the buffer, of the seq element count. */
+  cnt = buf ? (unsigned*)buf : NULL;
+  if (buf) {
+      cnt = (unsigned*)buf;
+      *cnt = 0;
+  }
+
+  /* Jump over the element count. */
+  len = (unsigned)sizeof(int);
+
+  /* Loop over all the properties. */
+  for (i = 0; i < ps->n; i++) {
+    nn_property_t *p = &(ps->props[i]);
+    if (p->propagate) {
+      len += nn_xmsg_add_string_padded(buf ? &(buf[len]) : NULL, p->name, forceBE);
+      len += nn_xmsg_add_string_padded(buf ? &(buf[len]) : NULL, p->value, forceBE);
+      n++;
+    }
+    /* p->propagate is not propagated over the wire. */
+  }
+  if (cnt) {
+    *cnt = forceBE ? toBE4u(n) : n;
+  }
+
+  return len;
+}
+
+unsigned nn_xmsg_add_binarypropertyseq_padded (unsigned char *buf, const struct nn_binarypropertyseq *bps, bool forceBE)
+{
+  unsigned i, len, n = 0;
+  unsigned *cnt = NULL;
+
+  assert(bps);
+
+  /* Get the address, within the buffer, of the seq element count. */
+  if (buf) {
+      cnt = (unsigned*)buf;
+      *cnt = 0;
+  }
+
+  /* Jump over the element count. */
+  len = (unsigned)sizeof(int);
+
+  /* Loop over all the properties. */
+  for (i = 0; i < bps->n; i++) {
+    nn_binaryproperty_t *p = &(bps->props[i]);
+    if (p->propagate) {
+      len += nn_xmsg_add_string_padded(buf ? &(buf[len]) : NULL,   p->name, forceBE);
+      len += nn_xmsg_add_octseq_padded(buf ? &(buf[len]) : NULL, &(p->value), forceBE);
+      n++;
+    }
+    /* p->propagate is not propagated over the wire. */
+  }
+  if (cnt) {
+    *cnt = forceBE ? toBE4u(n) : n;
+  }
+
+  return len;
+}
+
+unsigned nn_xmsg_add_dataholder_padded (unsigned char *buf, const struct nn_dataholder *dh, bool forceBE)
+{
+  unsigned len;
+
+  len  = nn_xmsg_add_string_padded(buf, dh->class_id, forceBE);
+  len += nn_xmsg_add_propertyseq_padded(buf ? &(buf[len]) : NULL, &(dh->properties), forceBE);
+  len += nn_xmsg_add_binarypropertyseq_padded(buf ? &(buf[len]) : NULL, &(dh->binary_properties), forceBE);
+
+  return len;
+}
+
+unsigned nn_xmsg_add_propertyqos_padded (_Inout_opt_ unsigned char *buf, _In_ const struct nn_property_qospolicy *pq, bool forceBE)
+{
+  unsigned len;
+
+  len  = nn_xmsg_add_propertyseq_padded(buf, &(pq->value), forceBE);
+  len += nn_xmsg_add_binarypropertyseq_padded(buf ? &(buf[len]) : NULL, &(pq->binary_value), forceBE);
+
+  return len;
+}
+
+
+void * nn_xmsg_addpar (struct nn_xmsg *m, unsigned pid, size_t len, bool forceBE)
 {
   const size_t len4 = (len + 3) & (size_t)-4; /* must alloc a multiple of 4 */
   nn_parameter_t *phdr;
@@ -814,7 +921,7 @@ void * nn_xmsg_addpar (struct nn_xmsg *m, unsigned pid, size_t len)
   return p;
 }
 
-void nn_xmsg_addpar_string (struct nn_xmsg *m, unsigned pid, const char *str)
+void nn_xmsg_addpar_string (struct nn_xmsg *m, unsigned pid, const char *str, bool forceBE)
 {
   struct cdrstring *p;
   unsigned len = (unsigned) strlen (str) + 1;
@@ -823,14 +930,14 @@ void nn_xmsg_addpar_string (struct nn_xmsg *m, unsigned pid, const char *str)
   memcpy (p->contents, str, len);
 }
 
-void nn_xmsg_addpar_octetseq (struct nn_xmsg *m, unsigned pid, const nn_octetseq_t *oseq)
+void nn_xmsg_addpar_octetseq (struct nn_xmsg *m, unsigned pid, const nn_octetseq_t *oseq, bool forceBE)
 {
   char *p = nn_xmsg_addpar (m, pid, 4 + oseq->length);
   *((unsigned *) p) = oseq->length;
   memcpy (p + sizeof (int), oseq->value, oseq->length);
 }
 
-void nn_xmsg_addpar_stringseq (struct nn_xmsg *m, unsigned pid, const nn_stringseq_t *sseq)
+void nn_xmsg_addpar_stringseq (struct nn_xmsg *m, unsigned pid, const nn_stringseq_t *sseq, bool forceBE)
 {
   unsigned char *tmp;
   uint32_t i;
@@ -851,7 +958,7 @@ void nn_xmsg_addpar_stringseq (struct nn_xmsg *m, unsigned pid, const nn_strings
   }
 }
 
-void nn_xmsg_addpar_keyhash (struct nn_xmsg *m, const struct ddsi_serdata *serdata)
+void nn_xmsg_addpar_keyhash (struct nn_xmsg *m, const struct ddsi_serdata *serdata, bool UNUSED_ARG(forceBE), int forceMD5)
 {
   if (serdata->kind != SDK_EMPTY)
   {
@@ -873,10 +980,10 @@ void nn_xmsg_addpar_guid (struct nn_xmsg *m, unsigned pid, const nn_guid_t *guid
   pu[i] = toBE4u (guid->entityid.u);
 }
 
-void nn_xmsg_addpar_reliability (struct nn_xmsg *m, unsigned pid, const struct nn_reliability_qospolicy *rq)
+void nn_xmsg_addpar_reliability (struct nn_xmsg *m, unsigned pid, const struct nn_reliability_qospolicy *rq, bool UNUSED_ARG(forceBE))
 {
   struct nn_external_reliability_qospolicy *p;
-  p = nn_xmsg_addpar (m, pid, sizeof (*p));
+  p = nn_xmsg_addpar (m, pid, sizeof (*p), false);
   if (NN_PEDANTIC_P)
   {
     switch (rq->kind)
@@ -937,7 +1044,7 @@ void nn_xmsg_addpar_statusinfo (struct nn_xmsg *m, unsigned statusinfo)
 }
 
 
-void nn_xmsg_addpar_share (struct nn_xmsg *m, unsigned pid, const struct nn_share_qospolicy *q)
+void nn_xmsg_addpar_share (struct nn_xmsg *m, unsigned pid, const struct nn_share_qospolicy *q, bool UNUSED_ARG(forceBE))
 {
   /* Written thus to allow q->name to be a null pointer if enable = false */
   const unsigned fixed_len = 4 + 4;
@@ -957,7 +1064,7 @@ void nn_xmsg_addpar_share (struct nn_xmsg *m, unsigned pid, const struct nn_shar
     ps->contents[0] = 0;
 }
 
-void nn_xmsg_addpar_subscription_keys (struct nn_xmsg *m, unsigned pid, const struct nn_subscription_keys_qospolicy *q)
+void nn_xmsg_addpar_subscription_keys (struct nn_xmsg *m, unsigned pid, const struct nn_subscription_keys_qospolicy *q, bool UNUSED_ARG(forceBE))
 {
   unsigned char *tmp;
   size_t len = 8; /* use_key_list, length of key_list */
@@ -992,12 +1099,27 @@ void nn_xmsg_addpar_subscription_keys (struct nn_xmsg *m, unsigned pid, const st
   }
 }
 
-void nn_xmsg_addpar_sentinel (struct nn_xmsg * m)
+void nn_xmsg_addpar_property (struct nn_xmsg *m, unsigned pid, const struct nn_property_qospolicy *rq, bool forceBE)
+{
+    unsigned char *tmp;
+    unsigned len;
+
+    /* Get total payload length. */
+    len = nn_xmsg_add_propertyqos_padded(NULL, rq, forceBE);
+
+    /* Prepare parameter header and get payload pointer. */
+    tmp = nn_xmsg_addpar (m, pid, 4 + len, forceBE);
+
+    /* Insert property qos policy. */
+    nn_xmsg_add_propertyqos_padded(tmp, rq, forceBE);
+}
+
+void nn_xmsg_addpar_sentinel (struct nn_xmsg * m, bool forceBE)
 {
   nn_xmsg_addpar (m, PID_SENTINEL, 0);
 }
 
-int nn_xmsg_addpar_sentinel_ifparam (struct nn_xmsg * m)
+int nn_xmsg_addpar_sentinel_ifparam (struct nn_xmsg * m, bool forceBE)
 {
   if (m->have_params)
   {
@@ -1007,7 +1129,7 @@ int nn_xmsg_addpar_sentinel_ifparam (struct nn_xmsg * m)
   return 0;
 }
 
-void nn_xmsg_addpar_parvinfo (struct nn_xmsg *m, unsigned pid, const struct nn_prismtech_participant_version_info *pvi)
+void nn_xmsg_addpar_parvinfo (struct nn_xmsg *m, unsigned pid, const struct nn_prismtech_participant_version_info *pvi, bool forceBE)
 {
   int i;
   unsigned slen;
@@ -1039,6 +1161,21 @@ void nn_xmsg_addpar_eotinfo (struct nn_xmsg *m, unsigned pid, const struct nn_pr
     pu[2*i + 2] = toBE4u (txnid->tids[i].writer_entityid.u);
     pu[2*i + 3] = txnid->tids[i].transactionId;
   }
+}
+
+void nn_xmsg_addpar_dataholder (struct nn_xmsg *m, unsigned pid, const struct nn_dataholder *dh, bool forceBE)
+{
+    unsigned char *tmp;
+    unsigned len;
+
+    /* Get total payload length. */
+    len = nn_xmsg_add_dataholder_padded(NULL, dh, forceBE);
+
+    /* Prepare parameter header and get payload pointer. */
+    tmp = nn_xmsg_addpar (m, pid, len, forceBE);
+
+    /* Insert dataholder. */
+    nn_xmsg_add_dataholder_padded(tmp, dh, forceBE);
 }
 
 /* XMSG_CHAIN ----------------------------------------------------------

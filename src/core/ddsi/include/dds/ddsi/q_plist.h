@@ -65,6 +65,11 @@ extern "C" {
 /* Security extensions. */
 #define PP_IDENTITY_TOKEN                       ((uint64_t)1 << 41)
 #define PP_PERMISSIONS_TOKEN                    ((uint64_t)1 << 42)
+#define PP_ENDPOINT_SECURITY_INFO               ((uint64_t)1 << 43)
+#define PP_PARTICIPANT_SECURITY_INFO            ((uint64_t)1 << 44)
+#define PP_IDENTITY_STATUS_TOKEN                ((uint64_t)1 << 45)
+#define PP_DATA_TAGS                            ((uint64_t)1 << 46)
+#define PP_PRISMTECH_PARTICIPANT_GID            ((uint64_t)1 << 47)
 /* Set for unrecognized parameters that are in the reserved space or
    in our own vendor-specific space that have the
    PID_UNRECOGNIZED_INCOMPATIBLE_FLAG set (see DDSI 2.1 9.6.2.2.1) */
@@ -106,12 +111,67 @@ typedef struct nn_keyhash {
   unsigned char value[16];
 } nn_keyhash_t;
 
+typedef struct nn_tag {
+  char *name;
+  char *value;
+} nn_tag_t;
+
+typedef struct nn_tagseq {
+  unsigned n;
+  nn_tag_t *tags;
+} nn_tagseq_t;
+
+typedef struct nn_datatags {
+  nn_tagseq_t tags;
+} nn_datatags_t;
 
 #ifdef DDSI_INCLUDE_SSM
 typedef struct nn_reader_favours_ssm {
   unsigned state; /* default is false */
 } nn_reader_favours_ssm_t;
 #endif
+
+typedef struct nn_dataholder
+{
+  char *class_id;
+  nn_propertyseq_t properties;
+  nn_binarypropertyseq_t binary_properties;
+} nn_dataholder_t;
+
+typedef nn_dataholder_t nn_token_t;
+
+/* Used for both nn_participant_security_info and nn_endpoint_security_info. */
+typedef struct nn_security_info
+{
+  unsigned security_attributes;
+  unsigned plugin_security_attributes;
+} nn_security_info_t;
+
+#define NN_ENDPOINT_SECURITY_ATTRIBUTES_FLAG_IS_READ_PROTECTED          (1u <<  0)
+#define NN_ENDPOINT_SECURITY_ATTRIBUTES_FLAG_IS_WRITE_PROTECTED         (1u <<  1)
+#define NN_ENDPOINT_SECURITY_ATTRIBUTES_FLAG_IS_DISCOVERY_PROTECTED     (1u <<  2)
+#define NN_ENDPOINT_SECURITY_ATTRIBUTES_FLAG_IS_SUBMESSAGE_PROTECTED    (1u <<  3)
+#define NN_ENDPOINT_SECURITY_ATTRIBUTES_FLAG_IS_PAYLOAD_PROTECTED       (1u <<  4)
+#define NN_ENDPOINT_SECURITY_ATTRIBUTES_FLAG_IS_KEY_PROTECTED           (1u <<  5)
+#define NN_ENDPOINT_SECURITY_ATTRIBUTES_FLAG_IS_LIVELINESS_PROTECTED    (1u <<  6)
+#define NN_ENDPOINT_SECURITY_ATTRIBUTES_FLAG_IS_VALID                   (1u << 31)
+
+#define NN_PLUGIN_ENDPOINT_SECURITY_ATTRIBUTES_FLAG_IS_SUBMESSAGE_ENCRYPTED            (1u << 0)
+#define NN_PLUGIN_ENDPOINT_SECURITY_ATTRIBUTES_FLAG_IS_PAYLOAD_ENCRYPTED               (1u << 1)
+#define NN_PLUGIN_ENDPOINT_SECURITY_ATTRIBUTES_FLAG_IS_SUBMESSAGE_ORIGIN_AUTHENTICATED (1u << 2)
+
+#define NN_PARTICIPANT_SECURITY_ATTRIBUTES_FLAG_IS_RTPS_PROTECTED       (1u <<  0)
+#define NN_PARTICIPANT_SECURITY_ATTRIBUTES_FLAG_IS_DISCOVERY_PROTECTED  (1u <<  1)
+#define NN_PARTICIPANT_SECURITY_ATTRIBUTES_FLAG_IS_LIVELINESS_PROTECTED (1u <<  2)
+#define NN_PARTICIPANT_SECURITY_ATTRIBUTES_FLAG_IS_VALID                (1u << 31)
+
+#define NN_PLUGIN_PARTICIPANT_SECURITY_ATTRIBUTES_FLAG_IS_RTPS_ENCRYPTED           (1u << 0)
+#define NN_PLUGIN_PARTICIPANT_SECURITY_ATTRIBUTES_FLAG_IS_DISCOVERY_ENCRYPTED      (1u << 1)
+#define NN_PLUGIN_PARTICIPANT_SECURITY_ATTRIBUTES_FLAG_IS_LIVELINESS_ENCRYPTED     (1u << 2)
+#define NN_PLUGIN_PARTICIPANT_SECURITY_ATTRIBUTES_FLAG_IS_RTPS_AUTHENTICATED       (1u << 3)
+#define NN_PLUGIN_PARTICIPANT_SECURITY_ATTRIBUTES_FLAG_IS_DISCOVERY_AUTHENTICATED  (1u << 4)
+#define NN_PLUGIN_PARTICIPANT_SECURITY_ATTRIBUTES_FLAG_IS_LIVELINESS_AUTHENTICATED (1u << 5)
+
 
 typedef struct nn_prismtech_participant_version_info
 {
@@ -175,6 +235,12 @@ typedef struct nn_plist {
   char *type_description;
   nn_sequence_number_t coherent_set_seqno;
   nn_prismtech_eotinfo_t eotinfo;
+  nn_token_t identity_token;
+  nn_token_t permissions_token;
+  nn_security_info_t endpoint_security_info;
+  nn_security_info_t participant_security_info;
+  nn_token_t identity_status_token;
+  nn_datatags_t data_tags;
 #ifdef DDSI_INCLUDE_SSM
   nn_reader_favours_ssm_t reader_favours_ssm;
 #endif
@@ -200,6 +266,8 @@ DDS_EXPORT int nn_plist_init_frommsg (nn_plist_t *dest, char **nextafterplist, u
 DDS_EXPORT void nn_plist_fini (nn_plist_t *ps);
 DDS_EXPORT void nn_plist_addtomsg (struct nn_xmsg *m, const nn_plist_t *ps, uint64_t pwanted, uint64_t qwanted);
 DDS_EXPORT int nn_plist_init_default_participant (nn_plist_t *plist);
+DDS_EXPORT void q_free_propertyseq (nn_propertyseq_t *pseq);
+DDS_EXPORT void q_duplicate_property (nn_property_t *dest, const nn_property_t *src);
 
 DDS_EXPORT int validate_history_qospolicy (const nn_history_qospolicy_t *q);
 DDS_EXPORT int validate_durability_qospolicy (const nn_durability_qospolicy_t *q);

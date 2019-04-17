@@ -124,7 +124,7 @@ static int alias_string (const unsigned char **ptr, const struct dd *dd, size_t 
 static void unalias_string (char **str, int bswap)
 {
   const char *alias = *str;
-  unsigned len;
+  size_t len;
   if (bswap == 0 || bswap == 1)
   {
     const unsigned *plen = (const unsigned *) alias - 1;
@@ -344,6 +344,745 @@ assert (dest->strs == NULL);
   }
 }
 
+static int validate_property (const struct dd *dd, size_t *len)
+{
+  struct dd ddV = *dd;
+  size_t lenN;
+  size_t lenV;
+  int rc;
+
+  /* Check name. */
+  rc = validate_string(dd, &lenN);
+  if (rc != 0)
+  {
+    DDS_TRACE("plist/validate_property: name validation failed\n");
+    return rc;
+  }
+  lenN = sizeof(unsigned) + /* cdr string len arg + */
+         align4u(lenN);     /* strlen + possible padding */
+
+
+  /* Check value. */
+  ddV.buf = dd->buf + lenN;
+  ddV.bufsz = dd->bufsz - lenN;
+  rc = validate_string(&ddV, &lenV);
+  if (rc != 0)
+  {
+    DDS_TRACE("plist/validate_property: value validation failed\n");
+    return rc;
+  }
+  lenV = sizeof(unsigned) + /* cdr string len arg + */
+         align4u(lenV);     /* strlen + possible padding */
+
+  *len = lenN + lenV;
+
+  return 0;
+}
+
+static int alias_property (nn_property_t *prop, const struct dd *dd, size_t *len)
+{
+  struct dd ddV = *dd;
+  size_t lenN;
+  size_t lenV;
+  int rc;
+
+  /* Get name */
+  rc = alias_string((const unsigned char **)&(prop->name), dd, &lenN);
+  if (rc != 0)
+  {
+    DDS_TRACE("plist/alias_property: invalid name buffer\n");
+    return rc;
+  }
+  lenN = sizeof(unsigned) + /* cdr string len arg + */
+         align4u(lenN);     /* strlen + possible padding */
+
+  /* Get value */
+  ddV.buf = dd->buf + lenN;
+  ddV.bufsz = dd->bufsz - lenN;
+  rc = alias_string((const unsigned char **)&(prop->value), &ddV, &lenV);
+  if (rc != 0)
+  {
+    DDS_TRACE("plist/alias_property: invalid value buffer\n");
+    return rc;
+  }
+  lenV = sizeof(unsigned) + /* cdr string len arg + */
+         align4u (lenV);    /* strlen + possible padding */
+
+  /* We got this from the wire; so it has been propagated. */
+  prop->propagate = true;
+
+  *len = lenN + lenV;
+
+  return 0;
+}
+
+void free_property (nn_property_t *prop)
+{
+  ddsrt_free(prop->name);
+  prop->name = NULL;
+  ddsrt_free(prop->value);
+  prop->value = NULL;
+}
+
+static void unalias_property (nn_property_t *prop, int bswap)
+{
+  unalias_string(&prop->name,  bswap);
+  unalias_string(&prop->value, bswap);
+}
+
+void q_duplicate_property (nn_property_t *dest, const nn_property_t *src)
+{
+    nn_property_t tmp = *src;
+    unalias_property(&tmp, -1);
+    *dest = tmp;
+}
+
+static int validate_propertyseq (const struct dd *dd, size_t *len)
+{
+  const unsigned char *seq = dd->buf;
+  const unsigned char *seqend = seq + dd->bufsz;
+  struct dd dd1 = *dd;
+  int i, n;
+  if (dd->bufsz < sizeof (int))
+  {
+    DDS_TRACE("plist/validate_propertyseq: buffer too small (header)\n");
+    return Q_ERR_INVALID;
+  }
+  memcpy (&n, seq, sizeof (n));
+  if (dd->bswap)
+    n = bswap4 (n);
+  seq += sizeof (int);
+  if (n < 0)
+  {
+    DDS_TRACE("plist/validate_propertyseq: length %d out of range\n", n);
+    return Q_ERR_INVALID;
+  }
+  else if (n == 0)
+  {
+    /* nothing to check */
+  }
+  else
+  {
+    for (i = 0; i < n && seq <= seqend; i++)
+    {
+      size_t len1;
+      int rc;
+      dd1.buf = seq;
+      dd1.bufsz = (unsigned) (seqend - seq);
+      if ((rc = validate_property (&dd1, &len1)) != 0)
+      {
+        DDS_TRACE("plist/validate_propertyseq: invalid property\n");
+        return rc;
+      }
+      seq += len1;
+    }
+    if (i < n)
+    {
+      DDS_TRACE("plist/validate_propertyseq: buffer too small (contents)\n");
+      return Q_ERR_INVALID;
+    }
+  }
+  *len = align4u((unsigned)(seq - dd->buf));
+  return 0;
+}
+
+static int alias_propertyseq (nn_propertyseq_t *pseq, const struct dd *dd, size_t *len)
+{
+  /* Not truly an alias: it allocates an array of pointers that alias
+     the individual components. Also: see validate_propertyseq */
+  const unsigned char *seq = dd->buf;
+  const unsigned char *seqend = seq + dd->bufsz;
+  struct dd dd1 = *dd;
+  nn_property_t *props;
+  unsigned i;
+  int result;
+  if (dd->bufsz < sizeof (int))
+  {
+    DDS_TRACE("plist/alias_propertyseq: buffer too small (header)\n");
+    return Q_ERR_INVALID;
+  }
+
+  memcpy (&pseq->n, seq, sizeof (pseq->n));
+  if (dd->bswap)
+      pseq->n = bswap4u (pseq->n);
+  seq += sizeof (unsigned);
+  if (pseq->n >= UINT_MAX / sizeof(*props))
+  {
+    DDS_TRACE("plist/alias_propertyseq: length %u out of range\n", pseq->n);
+    return Q_ERR_INVALID;
+  }
+  else if (pseq->n == 0)
+  {
+    pseq->props = NULL;
+  }
+  else
+  {
+    props = ddsrt_malloc (pseq->n * sizeof (*props));
+    for (i = 0; i < pseq->n && seq <= seqend; i++)
+    {
+      size_t len1;
+      dd1.buf = seq;
+      dd1.bufsz = (unsigned) (seqend - seq);
+      if ((result = alias_property (&props[i], &dd1, &len1)) != 0)
+      {
+        DDS_TRACE("plist/alias_propertyseq: invalid property\n");
+        goto fail;
+      }
+      seq += len1;
+    }
+    if (i != pseq->n)
+    {
+      DDS_TRACE("plist/alias_propertyseq: buffer too small (contents)\n");
+      result = Q_ERR_INVALID;
+      goto fail;
+    }
+    pseq->props = props;
+  }
+  *len = align4u((unsigned)(seq - dd->buf));
+  return 0;
+ fail:
+  ddsrt_free (props);
+  return result;
+}
+
+void q_free_propertyseq (nn_propertyseq_t *pseq)
+{
+  unsigned i;
+  for (i = 0; i < pseq->n; i++)
+  {
+    free_property(&(pseq->props[i]));
+  }
+  ddsrt_free (pseq->props);
+  pseq->props = NULL;
+  pseq->n = 0;
+}
+
+static void unalias_propertyseq (nn_propertyseq_t *pseq, int bswap)
+{
+  unsigned i;
+  nn_property_t *props;
+  if (pseq->n != 0)
+  {
+    props = ddsrt_malloc (pseq->n * sizeof (*pseq->props));
+    for (i = 0; i < pseq->n; i++)
+    {
+      props[i] = pseq->props[i];
+      unalias_property (&props[i], bswap);
+    }
+    pseq->props = props;
+  }
+}
+
+static void duplicate_propertyseq (nn_propertyseq_t *dest, const nn_propertyseq_t *src)
+{
+  unsigned i;
+  dest->n = src->n;
+  if (dest->n == 0)
+  {
+    dest->props = NULL;
+    return;
+  }
+  dest->props = ddsrt_malloc (dest->n * sizeof (*dest->props));
+  for (i = 0; i < dest->n; i++)
+  {
+    q_duplicate_property(&(dest->props[i]), &(src->props[i]));
+  }
+}
+
+
+static int validate_tag (const struct dd *dd, size_t *len)
+{
+  struct dd ddV = *dd;
+  size_t lenN;
+  size_t lenV;
+  int rc;
+
+  /* Check name. */
+  rc = validate_string(dd, &lenN);
+  if (rc != 0)
+  {
+    DDS_TRACE("plist/validate_tag: name validation failed\n");
+    return rc;
+  }
+  lenN = sizeof(unsigned) + /* cdr string len arg + */
+         align4u(lenN);     /* strlen + possible padding */
+
+
+  /* Check value. */
+  ddV.buf = dd->buf + lenN;
+  ddV.bufsz = dd->bufsz - lenN;
+  rc = validate_string(&ddV, &lenV);
+  if (rc != 0)
+  {
+    DDS_TRACE("plist/validate_tag: value validation failed\n");
+    return rc;
+  }
+  lenV = sizeof(unsigned) + /* cdr string len arg + */
+         align4u(lenV);     /* strlen + possible padding */
+
+  *len = lenN + lenV;
+
+  return 0;
+}
+
+static int alias_tag (nn_tag_t *tag, const struct dd *dd, size_t *len)
+{
+  struct dd ddV = *dd;
+  size_t lenN;
+  size_t lenV;
+  int rc;
+
+  /* Get name */
+  rc = alias_string((const unsigned char **)&(tag->name), dd, &lenN);
+  if (rc != 0)
+  {
+    DDS_TRACE("plist/alias_tag: invalid name buffer\n");
+    return rc;
+  }
+  lenN = sizeof(unsigned) + /* cdr string len arg + */
+         align4u(lenN);     /* strlen + possible padding */
+
+  /* Get value */
+  ddV.buf = dd->buf + lenN;
+  ddV.bufsz = dd->bufsz - lenN;
+  rc = alias_string((const unsigned char **)&(tag->value), &ddV, &lenV);
+  if (rc != 0)
+  {
+    DDS_TRACE("plist/alias_tag: invalid value buffer\n");
+    return rc;
+  }
+  lenV = sizeof(unsigned) + /* cdr string len arg + */
+         align4u (lenV);    /* strlen + possible padding */
+
+  *len = lenN + lenV;
+
+  return 0;
+}
+
+static void free_tag (nn_tag_t *tag)
+{
+  ddsrt_free(tag->name);
+  tag->name = NULL;
+  ddsrt_free(tag->value);
+  tag->value = NULL;
+}
+
+static void unalias_tag (nn_tag_t *tag, int bswap)
+{
+  unalias_string(&tag->name,  bswap);
+  unalias_string(&tag->value, bswap);
+}
+
+#if 0 /* not currently needed */
+static void duplicate_tag (nn_tag_t *dest, const nn_tag_t *src)
+{
+    nn_tag_t tmp = *src;
+    unalias_tag(&tmp, -1);
+    *dest = tmp;
+}
+#endif
+
+static int validate_tagseq (const struct dd *dd, size_t *len)
+{
+  const unsigned char *seq = dd->buf;
+  const unsigned char *seqend = seq + dd->bufsz;
+  struct dd dd1 = *dd;
+  int i, n;
+  if (dd->bufsz < sizeof (int))
+  {
+    DDS_TRACE("plist/validate_tagseq: buffer too small (header)\n");
+    return Q_ERR_INVALID;
+  }
+  memcpy (&n, seq, sizeof (n));
+  if (dd->bswap)
+    n = bswap4 (n);
+  seq += sizeof (int);
+  if (n < 0)
+  {
+    DDS_TRACE("plist/validate_tagseq: length %d out of range\n", n);
+    return Q_ERR_INVALID;
+  }
+  else if (n == 0)
+  {
+    /* nothing to check */
+  }
+  else
+  {
+    for (i = 0; i < n && seq <= seqend; i++)
+    {
+      size_t len1;
+      int rc;
+      dd1.buf = seq;
+      dd1.bufsz = (unsigned) (seqend - seq);
+      if ((rc = validate_tag (&dd1, &len1)) != 0)
+      {
+        DDS_TRACE("plist/validate_tagseq: invalid tag\n");
+        return rc;
+      }
+      seq += len1;
+    }
+    if (i < n)
+    {
+      DDS_TRACE("plist/validate_tagseq: buffer too small (contents)\n");
+      return Q_ERR_INVALID;
+    }
+  }
+  *len = align4u((unsigned)(seq - dd->buf));
+  return 0;
+}
+
+static int alias_tagseq (nn_tagseq_t *tseq, const struct dd *dd, size_t *len)
+{
+  /* Not truly an alias: it allocates an array of pointers that alias
+     the individual components. Also: see validate_propertyseq */
+  const unsigned char *seq = dd->buf;
+  const unsigned char *seqend = seq + dd->bufsz;
+  struct dd dd1 = *dd;
+  nn_tag_t *tags;
+  unsigned i;
+  int result;
+  if (dd->bufsz < sizeof (int))
+  {
+    DDS_TRACE("plist/alias_tagseq: buffer too small (header)\n");
+    return Q_ERR_INVALID;
+  }
+
+  memcpy (&tseq->n, seq, sizeof (tseq->n));
+  if (dd->bswap)
+      tseq->n = bswap4u (tseq->n);
+  seq += sizeof (unsigned);
+  if (tseq->n >= UINT_MAX / sizeof(*tags))
+  {
+    DDS_TRACE("plist/alias_tagseq: length %u out of range\n", tseq->n);
+    return Q_ERR_INVALID;
+  }
+  else if (tseq->n == 0)
+  {
+    tseq->tags = NULL;
+  }
+  else
+  {
+    tags = ddsrt_malloc (tseq->n * sizeof (*tags));
+    for (i = 0; i < tseq->n && seq <= seqend; i++)
+    {
+      size_t len1;
+      dd1.buf = seq;
+      dd1.bufsz = (unsigned) (seqend - seq);
+      if ((result = alias_tag (&tags[i], &dd1, &len1)) != 0)
+      {
+        DDS_TRACE("plist/alias_tagseq: invalid property\n");
+        goto fail;
+      }
+      seq += len1;
+    }
+    if (i != tseq->n)
+    {
+      DDS_TRACE("plist/alias_tagseq: buffer too small (contents)\n");
+      result = Q_ERR_INVALID;
+      goto fail;
+    }
+    tseq->tags = tags;
+  }
+  *len = align4u((unsigned)(seq - dd->buf));
+  return 0;
+ fail:
+  ddsrt_free (tags);
+  return result;
+}
+
+static void free_tagseq (nn_tagseq_t *tseq)
+{
+  unsigned i;
+  for (i = 0; i < tseq->n; i++)
+  {
+    free_tag(&(tseq->tags[i]));
+  }
+  ddsrt_free (tseq->tags);
+  tseq->tags = NULL;
+  tseq->n = 0;
+}
+
+static void unalias_tagseq (nn_tagseq_t *tseq, int bswap)
+{
+  unsigned i;
+  nn_tag_t *tags;
+  if (tseq->n != 0)
+  {
+    tags = ddsrt_malloc (tseq->n * sizeof (*tseq->tags));
+    for (i = 0; i < tseq->n; i++)
+    {
+      tags[i] = tseq->tags[i];
+      unalias_tag (&tags[i], bswap);
+    }
+    ddsrt_free (tseq->tags);
+    tseq->tags = tags;
+  }
+}
+
+#if 0 /* not currently needed */
+static void duplicate_tagseq (nn_tagseq_t *dest, const nn_tagseq_t *src)
+{
+  unsigned i;
+  dest->n = src->n;
+  if (dest->n == 0)
+  {
+    dest->tags = NULL;
+    return;
+  }
+  dest->tags = ddsrt_malloc (dest->n * sizeof (*dest->tags));
+  for (i = 0; i < dest->n; i++)
+  {
+    duplicate_tag(&(dest->tags[i]), &(src->tags[i]));
+  }
+}
+#endif
+
+static int validate_binaryproperty (const struct dd *dd, size_t *len)
+{
+  struct dd ddV = *dd;
+  size_t lenN;
+  size_t lenV;
+  int rc;
+
+  /* Check name. */
+  rc = validate_string(dd, &lenN);
+  if (rc != 0)
+  {
+    DDS_TRACE("plist/validate_property: name validation failed\n");
+    return rc;
+  }
+  lenN = sizeof(unsigned) + /* cdr string len arg + */
+         align4u(lenN);     /* strlen + possible padding */
+
+  /* Check value. */
+  ddV.buf = dd->buf + lenN;
+  ddV.bufsz = dd->bufsz - lenN;
+  rc = validate_octetseq(&ddV, &lenV);
+  if (rc != 0)
+  {
+    DDS_TRACE("plist/validate_property: value validation failed\n");
+    return rc;
+  }
+  lenV = sizeof(unsigned) + /* cdr sequence len arg + */
+         align4u(lenV);     /* seqlen + possible padding */
+
+  *len = lenN + lenV;
+
+  return 0;
+}
+
+static int alias_binaryproperty (nn_binaryproperty_t *prop, const struct dd *dd, size_t *len)
+{
+  struct dd ddV = *dd;
+  size_t lenN;
+  size_t lenV;
+  int rc;
+
+  /* Get name */
+  rc = alias_string((const unsigned char **)&(prop->name), dd, &lenN);
+  if (rc != 0)
+  {
+    DDS_TRACE("plist/alias_property: invalid name buffer\n");
+    return rc;
+  }
+  lenN = sizeof(unsigned) + /* cdr string len arg + */
+         align4u(lenN);     /* strlen + possible padding */
+
+  /* Get value */
+  ddV.buf = dd->buf + lenN;
+  ddV.bufsz = dd->bufsz - lenN;
+  rc = alias_octetseq(&(prop->value), &ddV);
+  if (rc != 0)
+  {
+    DDS_TRACE("plist/validate_property: invalid value buffer\n");
+    return rc;
+  }
+  lenV = sizeof(unsigned) +             /* cdr sequence len arg + */
+         align4u(prop->value.length);   /* seqlen + possible padding */
+
+  /* We got this from the wire; so it has been propagated. */
+  prop->propagate = true;
+
+  *len = lenN + lenV;
+
+  return 0;
+}
+
+static void free_binaryproperty (nn_binaryproperty_t *prop)
+{
+  ddsrt_free(prop->name);
+  prop->name = NULL;
+  ddsrt_free(prop->value.value);
+  prop->value.value = NULL;
+  prop->value.length = 0;
+}
+
+static void unalias_binaryproperty (nn_binaryproperty_t *prop, int bswap)
+{
+  unalias_string  (&prop->name,  bswap);
+  unalias_octetseq(&prop->value, bswap);
+}
+
+static void duplicate_binaryproperty (nn_binaryproperty_t *dest, const nn_binaryproperty_t *src)
+{
+    nn_binaryproperty_t tmp = *src;
+    unalias_binaryproperty(&tmp, -1);
+    *dest = tmp;
+}
+
+static int validate_binarypropertyseq (const struct dd *dd, size_t *len)
+{
+  const unsigned char *seq = dd->buf;
+  const unsigned char *seqend = seq + dd->bufsz;
+  struct dd dd1 = *dd;
+  int i, n;
+  if (dd->bufsz < sizeof (int))
+  {
+    DDS_TRACE("plist/validate_binarypropertyseq: buffer too small (header)\n");
+    return Q_ERR_INVALID;
+  }
+  memcpy (&n, seq, sizeof (n));
+  if (dd->bswap)
+    n = bswap4 (n);
+  seq += sizeof (int);
+  if (n < 0)
+  {
+    DDS_TRACE("plist/validate_binarypropertyseq: length %d out of range\n", n);
+    return Q_ERR_INVALID;
+  }
+  else if (n == 0)
+  {
+    /* nothing to check */
+  }
+  else
+  {
+    for (i = 0; i < n && seq <= seqend; i++)
+    {
+      size_t len1;
+      int rc;
+      dd1.buf = seq;
+      dd1.bufsz = (unsigned) (seqend - seq);
+      if ((rc = validate_binaryproperty (&dd1, &len1)) != 0)
+      {
+        DDS_TRACE("plist/validate_binarypropertyseq: invalid property\n");
+        return rc;
+      }
+      seq += len1;
+    }
+    if (i < n)
+    {
+      DDS_TRACE("plist/validate_binarypropertyseq: buffer too small (contents)\n");
+      return Q_ERR_INVALID;
+    }
+  }
+  *len = align4u((unsigned)(seq - dd->buf));
+  return 0;
+}
+
+static int alias_binarypropertyseq (nn_binarypropertyseq_t *pseq, const struct dd *dd, size_t *len)
+{
+  /* Not truly an alias: it allocates an array of pointers that alias
+     the individual components. Also: see validate_binarypropertyseq */
+  const unsigned char *seq = dd->buf;
+  const unsigned char *seqend = seq + dd->bufsz;
+  struct dd dd1 = *dd;
+  nn_binaryproperty_t *props;
+  unsigned i;
+  int result;
+  if (dd->bufsz < sizeof (int))
+  {
+    DDS_TRACE("plist/alias_binarypropertyseq: buffer too small (header)\n");
+    return Q_ERR_INVALID;
+  }
+
+  memcpy (&pseq->n, seq, sizeof (pseq->n));
+  if (dd->bswap)
+      pseq->n = bswap4u (pseq->n);
+  seq += sizeof (unsigned);
+  if (pseq->n >= UINT_MAX / sizeof(*props))
+  {
+    DDS_TRACE("plist/alias_binarypropertyseq: length %u out of range\n", pseq->n);
+    return Q_ERR_INVALID;
+  }
+  else if (pseq->n == 0)
+  {
+    pseq->props = NULL;
+  }
+  else
+  {
+    props = ddsrt_malloc (pseq->n * sizeof (*props));
+    for (i = 0; i < pseq->n && seq <= seqend; i++)
+    {
+      size_t len1;
+      dd1.buf = seq;
+      dd1.bufsz = (unsigned) (seqend - seq);
+      if ((result = alias_binaryproperty (&props[i], &dd1, &len1)) != 0)
+      {
+        DDS_TRACE("plist/alias_binarypropertyseq: invalid property\n");
+        goto fail;
+      }
+      seq += len1;
+    }
+    if (i != pseq->n)
+    {
+      DDS_TRACE("plist/alias_binarypropertyseq: buffer too small (contents)\n");
+      result = Q_ERR_INVALID;
+      goto fail;
+    }
+    pseq->props = props;
+  }
+  *len = align4u((unsigned)(seq - dd->buf));
+  return 0;
+ fail:
+  ddsrt_free (props);
+  return result;
+}
+
+static void free_binarypropertyseq (nn_binarypropertyseq_t *pseq)
+{
+  unsigned i;
+  for (i = 0; i < pseq->n; i++)
+  {
+    free_binaryproperty(&(pseq->props[i]));
+  }
+  ddsrt_free (pseq->props);
+  pseq->props = NULL;
+  pseq->n = 0;
+}
+
+static void unalias_binarypropertyseq (nn_binarypropertyseq_t *pseq, int bswap)
+{
+  unsigned i;
+  nn_binaryproperty_t *props;
+  if (pseq->n != 0)
+  {
+    props = ddsrt_malloc (pseq->n * sizeof (*pseq->props));
+    for (i = 0; i < pseq->n; i++)
+    {
+      props[i] = pseq->props[i];
+      unalias_binaryproperty (&props[i], bswap);
+    }
+    ddsrt_free (pseq->props);
+    pseq->props = props;
+  }
+}
+
+static void duplicate_binarypropertyseq (nn_binarypropertyseq_t *dest, const nn_binarypropertyseq_t *src)
+{
+  unsigned i;
+  dest->n = src->n;
+  if (dest->n == 0)
+  {
+    dest->props = NULL;
+    return;
+  }
+  dest->props = ddsrt_malloc (dest->n * sizeof (*dest->props));
+  for (i = 0; i < dest->n; i++)
+  {
+    duplicate_binaryproperty(&(dest->props[i]), &(src->props[i]));
+  }
+}
+
 static void free_locators (nn_locators_t *locs)
 {
   while (locs->first)
@@ -389,6 +1128,27 @@ static void unalias_eotinfo (nn_prismtech_eotinfo_t *txnid, UNUSED_ARG (int bswa
   }
 }
 
+static void free_dataholder (nn_dataholder_t *dh)
+{
+  ddsrt_free(dh->class_id);
+  dh->class_id = NULL;
+  q_free_propertyseq(&(dh->properties));
+  free_binarypropertyseq(&(dh->binary_properties));
+}
+
+static void unalias_dataholder (nn_dataholder_t *holder, int bswap)
+{
+  unalias_string(&(holder->class_id), bswap);
+  unalias_propertyseq(&(holder->properties), bswap);
+  unalias_binarypropertyseq(&(holder->binary_properties), bswap);
+}
+
+static void duplicate_property_qospolicy (nn_property_qospolicy_t *dest, const nn_property_qospolicy_t *src)
+{
+  duplicate_propertyseq(&(dest->value), &(src->value));
+  duplicate_binarypropertyseq(&(dest->binary_value), &(src->binary_value));
+}
+
 void nn_plist_fini (nn_plist_t *ps)
 {
   struct t { uint64_t fl; size_t off; };
@@ -408,6 +1168,11 @@ void nn_plist_fini (nn_plist_t *ps)
     { PP_METATRAFFIC_UNICAST_LOCATOR, offsetof (nn_plist_t, metatraffic_unicast_locators) },
     { PP_METATRAFFIC_MULTICAST_LOCATOR, offsetof (nn_plist_t, metatraffic_multicast_locators) }
   };
+  static const struct t tokens[] = {
+    { PP_IDENTITY_TOKEN, offsetof (nn_plist_t, identity_token) },
+    { PP_PERMISSIONS_TOKEN, offsetof (nn_plist_t, permissions_token) },
+    { PP_IDENTITY_STATUS_TOKEN, offsetof (nn_plist_t, identity_status_token) }
+  };
   int i;
   nn_xqos_fini (&ps->qos);
 
@@ -425,6 +1190,18 @@ DDSRT_WARNING_MSVC_OFF(6001);
   {
     if ((ps->present & locs[i].fl) && !(ps->aliased & locs[i].fl))
       free_locators ((nn_locators_t *) ((char *) ps + locs[i].off));
+  }
+  for (i = 0; i < (int) (sizeof (tokens) / sizeof (*tokens)); i++)
+  {
+    if ((ps->present & tokens[i].fl) && !(ps->aliased & tokens[i].fl))
+      free_dataholder ((nn_token_t *) ((char *) ps + tokens[i].off));
+  }
+  if (ps->present & PP_DATA_TAGS)
+  {
+    if (!(ps->aliased & PP_DATA_TAGS))
+    {
+      free_tagseq(&ps->data_tags.tags);
+    }
   }
 DDSRT_WARNING_MSVC_ON(6001);
 
@@ -452,6 +1229,8 @@ void nn_plist_unalias (nn_plist_t *ps)
   P (PRISMTECH_EXEC_NAME, string, exec_name);
   P (PRISMTECH_TYPE_DESCRIPTION, string, type_description);
   P (PRISMTECH_EOTINFO, eotinfo, eotinfo);
+  P (IDENTITY_TOKEN, dataholder, identity_token);
+  P (PERMISSIONS_TOKEN, dataholder, permissions_token);
 #undef P
   if ((ps->present & PP_PRISMTECH_PARTICIPANT_VERSION_INFO) &&
       (ps->aliased & PP_PRISMTECH_PARTICIPANT_VERSION_INFO))
@@ -1265,12 +2044,22 @@ static int valid_endpoint_guid (const nn_guid_t *g, const struct dd *dd)
         case NN_ENTITYID_SEDP_BUILTIN_TOPIC_READER:
         case NN_ENTITYID_SEDP_BUILTIN_PUBLICATIONS_WRITER:
         case NN_ENTITYID_SEDP_BUILTIN_PUBLICATIONS_READER:
+        case NN_ENTITYID_SEDP_BUILTIN_PUBLICATIONS_SECURE_WRITER:
+        case NN_ENTITYID_SEDP_BUILTIN_PUBLICATIONS_SECURE_READER:
         case NN_ENTITYID_SEDP_BUILTIN_SUBSCRIPTIONS_WRITER:
         case NN_ENTITYID_SEDP_BUILTIN_SUBSCRIPTIONS_READER:
+        case NN_ENTITYID_SEDP_BUILTIN_SUBSCRIPTIONS_SECURE_WRITER:
+        case NN_ENTITYID_SEDP_BUILTIN_SUBSCRIPTIONS_SECURE_READER:
         case NN_ENTITYID_SPDP_BUILTIN_PARTICIPANT_WRITER:
         case NN_ENTITYID_SPDP_BUILTIN_PARTICIPANT_READER:
         case NN_ENTITYID_P2P_BUILTIN_PARTICIPANT_MESSAGE_WRITER:
         case NN_ENTITYID_P2P_BUILTIN_PARTICIPANT_MESSAGE_READER:
+        case NN_ENTITYID_SPDP_RELIABLE_BUILTIN_PARTICIPANT_SECURE_WRITER:
+        case NN_ENTITYID_SPDP_RELIABLE_BUILTIN_PARTICIPANT_SECURE_READER:
+        case NN_ENTITYID_P2P_BUILTIN_PARTICIPANT_VOLATILE_SECURE_WRITER:
+        case NN_ENTITYID_P2P_BUILTIN_PARTICIPANT_VOLATILE_SECURE_READER:
+        case NN_ENTITYID_P2P_BUILTIN_PARTICIPANT_MESSAGE_SECURE_WRITER:
+        case NN_ENTITYID_P2P_BUILTIN_PARTICIPANT_MESSAGE_SECURE_READER:
           return 0;
         default:
           if (protocol_version_is_newer (dd->protocol_version))
@@ -1511,6 +2300,216 @@ static int do_reader_data_lifecycle_v1 (nn_reader_data_lifecycle_qospolicy_t *q,
     q->invalid_sample_visibility = (nn_invalid_sample_visibility_kind_t) bswap4u ((unsigned) q->invalid_sample_visibility);
   }
   return validate_reader_data_lifecycle (q);
+}
+
+static int do_property (nn_property_qospolicy_t *pq, uint64_t *present, uint64_t *aliased, uint64_t wanted, uint64_t fl, const struct dd *dd)
+{
+  struct dd ddtmp = *dd;
+  size_t len;
+  int res;
+
+  memset(pq, 0, sizeof(nn_property_qospolicy_t));
+
+  if (!(wanted & fl))
+  {
+    res = 0;
+    if (NN_STRICT_P)
+    {
+      /* check properties */
+      if ((res = validate_propertyseq (&ddtmp, &len)) == 0)
+      {
+        /* check binary properties */
+        ddtmp.buf = &(ddtmp.buf[len]);
+        ddtmp.bufsz = ddtmp.bufsz - len;
+        if (ddtmp.bufsz > 0)
+        {
+          if ((res = validate_binarypropertyseq (&ddtmp, &len)) != 0)
+          {
+            DDS_TRACE("plist/do_property: invalid binary_property_seq\n");
+          }
+        }
+      }
+      else
+      {
+        DDS_TRACE("plist/do_property: invalid property_seq\n");
+      }
+    }
+    return res;
+  }
+
+  /* get properties */
+  res = alias_propertyseq(&(pq->value), &ddtmp, &len /* complete length */);
+  if (res != 0)
+  {
+    DDS_TRACE("plist/do_property: invalid property_seq\n");
+    return res;
+  }
+
+  /* get binary properties */
+  ddtmp.buf = &(ddtmp.buf[len]);
+  ddtmp.bufsz = ddtmp.bufsz - len;
+  if (ddtmp.bufsz > 0)
+  {
+    res = alias_binarypropertyseq(&(pq->binary_value), &ddtmp, &len /* complete length */);
+    if (res != 0)
+    {
+      DDS_TRACE("plist/do_property: invalid binary_property_seq\n");
+      return res;
+    }
+  }
+
+  *present |= fl;
+  *aliased |= fl;
+
+  return 0;
+}
+
+static int do_datatags (nn_datatags_t *dt, uint64_t *present, uint64_t *aliased, uint64_t wanted, uint64_t fl, const struct dd *dd)
+{
+  struct dd ddtmp = *dd;
+  size_t len;
+  int res;
+
+  memset(dt, 0, sizeof(nn_datatags_t));
+
+  if (!(wanted & fl))
+  {
+    res = 0;
+    if (NN_STRICT_P)
+    {
+      /* check properties */
+      if ((res = validate_tagseq (&ddtmp, &len)) != 0)
+      {
+        DDS_TRACE("plist/do_datatags: invalid tag_seq\n");
+      }
+    }
+    return res;
+  }
+
+  /* get properties */
+  res = alias_tagseq(&(dt->tags), &ddtmp, &len /* complete length */);
+  if (res != 0)
+  {
+    DDS_TRACE("plist/do_datatags: invalid tag_seq\n");
+    return res;
+  }
+
+  *present |= fl;
+  *aliased |= fl;
+
+  return 0;
+}
+
+static int do_dataholder (nn_dataholder_t *dh, uint64_t *present, uint64_t *aliased, uint64_t wanted, uint64_t fl, const struct dd *dd)
+{
+  struct dd ddtmp = *dd;
+  size_t len;
+  int res;
+
+  memset(dh, 0, sizeof(nn_dataholder_t));
+
+  if (!(wanted & fl))
+  {
+    res = 0;
+    if (NN_STRICT_P)
+    {
+      /* check class_id */
+      if ((res = validate_string (&ddtmp, &len)) == 0)
+      {
+        len = sizeof(unsigned) + /* cdr string len arg + */
+              align4u(len);      /* strlen + possible padding */
+        /* check properties */
+        ddtmp.buf = &(dd->buf[len]);
+        ddtmp.bufsz = dd->bufsz - len;
+        if ((res = validate_propertyseq (&ddtmp, &len)) == 0)
+        {
+          /* check binary properties */
+          ddtmp.buf = &(ddtmp.buf[len]);
+          ddtmp.bufsz = ddtmp.bufsz - len;
+          if ((res = validate_binarypropertyseq (&ddtmp, &len)) != 0)
+          {
+            DDS_TRACE("plist/do_dataholder: invalid binary_property_seq\n");
+          }
+        }
+        else
+        {
+          DDS_TRACE("plist/do_dataholder: invalid property_seq\n");
+        }
+      }
+      else
+      {
+        DDS_TRACE("plist/do_dataholder: invalid class_id\n");
+      }
+    }
+    return res;
+  }
+
+  /* get class_id */
+  res = alias_string((const unsigned char **)&(dh->class_id), dd, &len /* strlen */);
+  if (res != 0)
+  {
+    DDS_TRACE("plist/do_dataholder: invalid class_id\n");
+    return res;
+  }
+  len = sizeof(unsigned) + /* cdr string len arg + */
+        align4u(len);      /* strlen + possible padding */
+
+  /* get properties */
+  ddtmp.buf = &(dd->buf[len]);
+  ddtmp.bufsz = dd->bufsz - len;
+  res = alias_propertyseq(&(dh->properties), &ddtmp, &len /* complete length */);
+  if (res != 0)
+  {
+    DDS_TRACE("plist/do_dataholder: invalid property_seq\n");
+    return res;
+  }
+
+  /* get binary properties */
+  ddtmp.buf = &(ddtmp.buf[len]);
+  ddtmp.bufsz = ddtmp.bufsz - len;
+  res = alias_binarypropertyseq(&(dh->binary_properties), &ddtmp, &len /* complete length */);
+  if (res != 0)
+  {
+    DDS_TRACE("plist/do_dataholder: invalid binary_property_seq\n");
+    return res;
+  }
+
+  *present |= fl;
+  *aliased |= fl;
+
+  return 0;
+}
+
+static int do_security_info (nn_security_info_t *psi, uint64_t *present, uint64_t wanted, uint64_t fl, const struct dd *dd)
+{
+  if (!(wanted & fl))
+  {
+    if (NN_STRICT_P)
+    {
+      if (dd->bufsz < sizeof (nn_security_info_t))
+      {
+        DDS_TRACE("plist/do_security_info: buffer too small\n");
+        return Q_ERR_INVALID;
+      }
+    }
+    return 0;
+  }
+
+  if (dd->bufsz < sizeof (nn_security_info_t))
+  {
+    DDS_TRACE("plist/do_security_info: buffer too small\n");
+    return Q_ERR_INVALID;
+  }
+
+  memcpy (psi, dd->buf, sizeof (nn_security_info_t));
+
+  if (dd->bswap)
+  {
+    psi->security_attributes = bswap4u (psi->security_attributes);
+    psi->plugin_security_attributes = bswap4u (psi->plugin_security_attributes);
+  }
+  *present |= fl;
+  return 0;
 }
 
 static int init_one_parameter
@@ -1876,6 +2875,13 @@ static int init_one_parameter
                                           NN_DISC_BUILTIN_ENDPOINT_SUBSCRIPTION_DETECTOR |
                                           NN_DISC_BUILTIN_ENDPOINT_TOPIC_ANNOUNCER |
                                           NN_DISC_BUILTIN_ENDPOINT_TOPIC_DETECTOR |
+                                          /* security ones: */
+                                          NN_BUILTIN_ENDPOINT_PUBLICATION_MESSAGE_SECURE_ANNOUNCER |
+                                          NN_BUILTIN_ENDPOINT_PUBLICATION_MESSAGE_SECURE_DETECTOR |
+                                          NN_BUILTIN_ENDPOINT_SUBSCRIPTION_MESSAGE_SECURE_ANNOUNCER |
+                                          NN_BUILTIN_ENDPOINT_SUBSCRIPTION_MESSAGE_SECURE_DETECTOR |
+                                          NN_DISC_BUILTIN_ENDPOINT_PARTICIPANT_SECURE_ANNOUNCER |
+                                          NN_DISC_BUILTIN_ENDPOINT_PARTICIPANT_SECURE_DETECTOR |
                                           /* undefined ones: */
                                           NN_DISC_BUILTIN_ENDPOINT_PARTICIPANT_PROXY_ANNOUNCER |
                                           NN_DISC_BUILTIN_ENDPOINT_PARTICIPANT_PROXY_DETECTOR |
@@ -1891,6 +2897,9 @@ static int init_one_parameter
       }
       dest->present |= PP_BUILTIN_ENDPOINT_SET;
       return 0;
+
+    case PID_DATA_TAGS:
+      return do_datatags (&dest->data_tags, &dest->present, &dest->aliased, pwanted, PP_DATA_TAGS, dd);
 
     case PID_PRISMTECH_BUILTIN_ENDPOINT_SET:
       if (!vendor_is_eclipse_or_prismtech (dd->vendorid))
@@ -1910,6 +2919,8 @@ static int init_one_parameter
       return 0;
 
     case PID_PROPERTY_LIST:
+      return do_property (&dest->qos.property, &dest->qos.present, &dest->qos.aliased, qwanted, QP_PROPERTY_LIST, dd);
+
     case PID_TYPE_MAX_SIZE_SERIALIZED:
       /* FIXME */
       return 0;
@@ -2152,6 +3163,21 @@ static int init_one_parameter
       }
 #endif
 
+    case PID_IDENTITY_TOKEN:
+      return do_dataholder (&dest->identity_token, &dest->present, &dest->aliased, pwanted, PP_IDENTITY_TOKEN, dd);
+
+    case PID_PERMISSIONS_TOKEN:
+      return do_dataholder (&dest->permissions_token, &dest->present, &dest->aliased, pwanted, PP_PERMISSIONS_TOKEN, dd);
+
+    case PID_ENDPOINT_SECURITY_INFO:
+      return do_security_info (&dest->endpoint_security_info, &dest->present, pwanted, PP_ENDPOINT_SECURITY_INFO, dd);
+
+    case PID_PARTICIPANT_SECURITY_INFO:
+      return do_security_info (&dest->participant_security_info, &dest->present, pwanted, PP_PARTICIPANT_SECURITY_INFO, dd);
+
+    case PID_IDENTITY_STATUS_TOKEN:
+        return do_dataholder (&dest->identity_status_token, &dest->present, &dest->aliased, pwanted, PP_IDENTITY_STATUS_TOKEN, dd);
+
       /* Deprecated ones (used by RTI, but not relevant to DDSI) */
     case PID_PERSISTENCE:
     case PID_TYPE_CHECKSUM:
@@ -2242,6 +3268,8 @@ void nn_plist_mergein_missing (nn_plist_t *a, const nn_plist_t *b)
   CQ (PRISMTECH_SERVICE_TYPE, service_type);
   CQ (PRISMTECH_PROCESS_ID, process_id);
   CQ (PRISMTECH_BUILTIN_ENDPOINT_SET, prismtech_builtin_endpoint_set);
+  CQ (ENDPOINT_SECURITY_INFO, endpoint_security_info);
+  CQ (PARTICIPANT_SECURITY_INFO, participant_security_info);
 #ifdef DDSI_INCLUDE_SSM
   CQ (READER_FAVOURS_SSM, reader_favours_ssm);
 #endif
@@ -2270,6 +3298,10 @@ void nn_plist_mergein_missing (nn_plist_t *a, const nn_plist_t *b)
   CQ (PRISMTECH_EXEC_NAME, exec_name, string, char *);
   CQ (PRISMTECH_TYPE_DESCRIPTION, type_description, string, char *);
   CQ (PRISMTECH_EOTINFO, eotinfo, eotinfo, nn_prismtech_eotinfo_t);
+  CQ (IDENTITY_TOKEN, identity_token, dataholder, nn_token_t);
+  CQ (PERMISSIONS_TOKEN, permissions_token, dataholder, nn_token_t);
+  CQ (IDENTITY_STATUS_TOKEN, identity_status_token, dataholder, nn_token_t);
+  CQ (DATA_TAGS, data_tags.tags, tagseq, nn_tagseq_t);
 #undef CQ
   if (!(a->present & PP_PRISMTECH_PARTICIPANT_VERSION_INFO) &&
       (b->present & PP_PRISMTECH_PARTICIPANT_VERSION_INFO))
@@ -2842,6 +3874,11 @@ void nn_xqos_mergein_missing (nn_xqos_t *a, const nn_xqos_t *b)
     duplicate_stringseq (&a->partition, &b->partition);
     a->present |= QP_PARTITION;
   }
+  if (!(a->present & QP_PROPERTY_LIST) && (b->present & QP_PROPERTY_LIST))
+  {
+    duplicate_property_qospolicy (&a->property, &b->property);
+    a->present |= QP_PROPERTY_LIST;
+  }
 }
 
 void nn_xqos_copy (nn_xqos_t *dst, const nn_xqos_t *src)
@@ -2915,6 +3952,14 @@ void nn_xqos_fini (nn_xqos_t *xqos)
       /* until proper message buffers arrive */
       DDS_LOG(DDS_LC_PLIST, "NN_XQOS_FINI free %p\n", (void *) xqos->subscription_keys.key_list.strs);
       ddsrt_free (xqos->subscription_keys.key_list.strs);
+    }
+  }
+  if (xqos->present & QP_PROPERTY_LIST)
+  {
+    if (!(xqos->aliased & QP_PROPERTY_LIST))
+    {
+      q_free_propertyseq(&xqos->property.value);
+      free_binarypropertyseq(&xqos->property.binary_value);
     }
   }
   xqos->present = 0;
@@ -3202,7 +4247,7 @@ uint64_t nn_xqos_delta (const nn_xqos_t *a, const nn_xqos_t *b, uint64_t mask)
 
 /*************************/
 
-void nn_xqos_addtomsg (struct nn_xmsg *m, const nn_xqos_t *xqos, uint64_t wanted)
+void nn_xqos_addtomsg (struct nn_xmsg *m, const nn_xqos_t *xqos, uint64_t wanted, bool forceBE)
 {
   /* Returns new nn_xmsg pointer (currently, reallocs may happen) */
 
@@ -3211,20 +4256,20 @@ void nn_xqos_addtomsg (struct nn_xmsg *m, const nn_xqos_t *xqos, uint64_t wanted
 #define SIMPLE(name_, field_) \
   do { \
     if (w & QP_##name_) { \
-      tmp = nn_xmsg_addpar (m, PID_##name_, sizeof (xqos->field_)); \
+      tmp = nn_xmsg_addpar (m, PID_##name_, sizeof (xqos->field_), forceBE); \
       *((nn_##field_##_qospolicy_t *) tmp) = xqos->field_; \
     } \
   } while (0)
 #define FUNC_BY_REF(name_, field_, func_) \
   do { \
     if (w & QP_##name_) { \
-      nn_xmsg_addpar_##func_ (m, PID_##name_, &xqos->field_); \
+      nn_xmsg_addpar_##func_ (m, PID_##name_, &xqos->field_, forceBE); \
     } \
   } while (0)
 #define FUNC_BY_VAL(name_, field_, func_) \
   do { \
     if (w & QP_##name_) { \
-      nn_xmsg_addpar_##func_ (m, PID_##name_, xqos->field_); \
+      nn_xmsg_addpar_##func_ (m, PID_##name_, xqos->field_, forceBE); \
     } \
   } while (0)
 
@@ -3257,6 +4302,7 @@ void nn_xqos_addtomsg (struct nn_xmsg *m, const nn_xqos_t *xqos, uint64_t wanted
   SIMPLE (PRISMTECH_ENTITY_FACTORY, entity_factory);
   SIMPLE (PRISMTECH_SYNCHRONOUS_ENDPOINT, synchronous_endpoint);
   FUNC_BY_REF (RTI_TYPECODE, rti_typecode, octetseq);
+  FUNC_BY_REF (PROPERTY_LIST, property, property);
 #undef FUNC_BY_REF
 #undef FUNC_BY_VAL
 #undef SIMPLE
@@ -3269,13 +4315,30 @@ static void add_locators (struct nn_xmsg *m, uint64_t present, uint64_t flag, co
   {
     for (l = ls->first; l != NULL; l = l->next)
     {
-      char *tmp = nn_xmsg_addpar (m, pid, sizeof (nn_locator_t));
+      char *tmp = nn_xmsg_addpar (m, pid, sizeof (nn_locator_t), false);
       memcpy (tmp, &l->loc, sizeof (nn_locator_t));
     }
   }
 }
 
-void nn_plist_addtomsg (struct nn_xmsg *m, const nn_plist_t *ps, uint64_t pwanted, uint64_t qwanted)
+static void add_locatorsBE (struct nn_xmsg *m, uint64_t present, uint64_t flag, const nn_locators_t *ls, unsigned pid)
+{
+  const struct nn_locators_one *l;
+  nn_locator_t loc;
+  if (present & flag)
+  {
+    for (l = ls->first; l != NULL; l = l->next)
+    {
+      char *tmp = nn_xmsg_addpar (m, pid, sizeof (nn_locator_t), true);
+      memcpy(&loc, &l->loc, sizeof (nn_locator_t));
+      loc.kind = toBE4(loc.kind);
+      loc.port = toBE4u(loc.port);
+      memcpy (tmp, &loc, sizeof (nn_locator_t));
+    }
+  }
+}
+
+void nn_plist_addtomsg (struct nn_xmsg *m, const nn_plist_t *ps, uint64_t pwanted, uint64_t qwanted, bool forceBE)
 {
   /* Returns new nn_xmsg pointer (currently, reallocs may happen), or NULL
      on out-of-memory. (In which case the original nn_xmsg is freed, cos
@@ -3285,33 +4348,42 @@ void nn_plist_addtomsg (struct nn_xmsg *m, const nn_plist_t *ps, uint64_t pwante
 #define SIMPLE_TYPE(name_, field_, type_) \
   do { \
     if (w & PP_##name_) { \
-      tmp = nn_xmsg_addpar (m, PID_##name_, sizeof (ps->field_)); \
+      tmp = nn_xmsg_addpar (m, PID_##name_, sizeof (ps->field_), forceBE); \
       *((type_ *) tmp) = ps->field_; \
     } \
   } while (0)
 #define FUNC_BY_VAL(name_, field_, func_) \
   do { \
     if (w & PP_##name_) { \
-      nn_xmsg_addpar_##func_ (m, PID_##name_, ps->field_); \
+      nn_xmsg_addpar_##func_ (m, PID_##name_, ps->field_, forceBE); \
     } \
   } while (0)
 #define FUNC_BY_REF(name_, field_, func_) \
   do { \
     if (w & PP_##name_) { \
-      nn_xmsg_addpar_##func_ (m, PID_##name_, &ps->field_); \
+      nn_xmsg_addpar_##func_ (m, PID_##name_, &ps->field_, forceBE); \
     } \
   } while (0)
 
-  nn_xqos_addtomsg (m, &ps->qos, qwanted);
+  nn_xqos_addtomsg (m, &ps->qos, qwanted, forceBE);
   SIMPLE_TYPE (PROTOCOL_VERSION, protocol_version, nn_protocol_version_t);
   SIMPLE_TYPE (VENDORID, vendorid, nn_vendorid_t);
 
-  add_locators (m, ps->present, PP_UNICAST_LOCATOR, &ps->unicast_locators, PID_UNICAST_LOCATOR);
-  add_locators (m, ps->present, PP_MULTICAST_LOCATOR, &ps->multicast_locators, PID_MULTICAST_LOCATOR);
-  add_locators (m, ps->present, PP_DEFAULT_UNICAST_LOCATOR, &ps->default_unicast_locators, PID_DEFAULT_UNICAST_LOCATOR);
-  add_locators (m, ps->present, PP_DEFAULT_MULTICAST_LOCATOR, &ps->default_multicast_locators, PID_DEFAULT_MULTICAST_LOCATOR);
-  add_locators (m, ps->present, PP_METATRAFFIC_UNICAST_LOCATOR, &ps->metatraffic_unicast_locators, PID_METATRAFFIC_UNICAST_LOCATOR);
-  add_locators (m, ps->present, PP_METATRAFFIC_MULTICAST_LOCATOR, &ps->metatraffic_multicast_locators, PID_METATRAFFIC_MULTICAST_LOCATOR);
+  if (!forceBE) {
+    add_locators (m, ps->present, PP_UNICAST_LOCATOR, &ps->unicast_locators, PID_UNICAST_LOCATOR);
+    add_locators (m, ps->present, PP_MULTICAST_LOCATOR, &ps->multicast_locators, PID_MULTICAST_LOCATOR);
+    add_locators (m, ps->present, PP_DEFAULT_UNICAST_LOCATOR, &ps->default_unicast_locators, PID_DEFAULT_UNICAST_LOCATOR);
+    add_locators (m, ps->present, PP_DEFAULT_MULTICAST_LOCATOR, &ps->default_multicast_locators, PID_DEFAULT_MULTICAST_LOCATOR);
+    add_locators (m, ps->present, PP_METATRAFFIC_UNICAST_LOCATOR, &ps->metatraffic_unicast_locators, PID_METATRAFFIC_UNICAST_LOCATOR);
+    add_locators (m, ps->present, PP_METATRAFFIC_MULTICAST_LOCATOR, &ps->metatraffic_multicast_locators, PID_METATRAFFIC_MULTICAST_LOCATOR);
+  } else {
+    add_locatorsBE (m, ps->present, PP_UNICAST_LOCATOR, &ps->unicast_locators, PID_UNICAST_LOCATOR);
+    add_locatorsBE (m, ps->present, PP_MULTICAST_LOCATOR, &ps->multicast_locators, PID_MULTICAST_LOCATOR);
+    add_locatorsBE (m, ps->present, PP_DEFAULT_UNICAST_LOCATOR, &ps->default_unicast_locators, PID_DEFAULT_UNICAST_LOCATOR);
+    add_locatorsBE (m, ps->present, PP_DEFAULT_MULTICAST_LOCATOR, &ps->default_multicast_locators, PID_DEFAULT_MULTICAST_LOCATOR);
+    add_locatorsBE (m, ps->present, PP_METATRAFFIC_UNICAST_LOCATOR, &ps->metatraffic_unicast_locators, PID_METATRAFFIC_UNICAST_LOCATOR);
+    add_locatorsBE (m, ps->present, PP_METATRAFFIC_MULTICAST_LOCATOR, &ps->metatraffic_multicast_locators, PID_METATRAFFIC_MULTICAST_LOCATOR);
+  }
 
   SIMPLE_TYPE (EXPECTS_INLINE_QOS, expects_inline_qos, unsigned char);
   SIMPLE_TYPE (PARTICIPANT_LEASE_DURATION, participant_lease_duration, nn_duration_t);
@@ -3327,7 +4399,7 @@ void nn_plist_addtomsg (struct nn_xmsg *m, const nn_plist_t *ps, uint64_t pwante
   {
     if (w & PP_ENDPOINT_GUID)
     {
-      nn_xmsg_addpar_guid (m, PID_PRISMTECH_ENDPOINT_GUID, &ps->endpoint_guid);
+      nn_xmsg_addpar_guid (m, PID_PRISMTECH_ENDPOINT_GUID, &ps->endpoint_guid, false);
     }
   }
   FUNC_BY_REF (GROUP_GUID, group_guid, guid);
@@ -3340,6 +4412,11 @@ void nn_plist_addtomsg (struct nn_xmsg *m, const nn_plist_t *ps, uint64_t pwante
   SIMPLE_TYPE (PRISMTECH_SERVICE_TYPE, service_type, unsigned);
   FUNC_BY_VAL (PRISMTECH_TYPE_DESCRIPTION, type_description, string);
   FUNC_BY_REF (PRISMTECH_EOTINFO, eotinfo, eotinfo);
+  FUNC_BY_REF (IDENTITY_TOKEN, identity_token, dataholder);
+  FUNC_BY_REF (PERMISSIONS_TOKEN, permissions_token, dataholder);
+  SIMPLE_TYPE (ENDPOINT_SECURITY_INFO, endpoint_security_info, nn_security_info_t);
+  SIMPLE_TYPE (PARTICIPANT_SECURITY_INFO, participant_security_info, nn_security_info_t);
+  FUNC_BY_REF (IDENTITY_STATUS_TOKEN, identity_status_token, dataholder);
 #ifdef DDSI_INCLUDE_SSM
   SIMPLE_TYPE (READER_FAVOURS_SSM, reader_favours_ssm, nn_reader_favours_ssm_t);
 #endif
@@ -3462,6 +4539,25 @@ void nn_log_xqos (uint32_t cat, const nn_xqos_t *xqos)
   });
   DO (PRISMTECH_ENTITY_FACTORY, { LOGB1 ("entity_factory=%u", xqos->entity_factory.autoenable_created_entities); });
   DO (PRISMTECH_SYNCHRONOUS_ENDPOINT, { LOGB1 ("synchronous_endpoint=%u", xqos->synchronous_endpoint.value); });
+  DO (PROPERTY_LIST, {
+    unsigned i;
+    LOGB0 ("property={{");
+    for (i = 0; i < xqos->property.value.n; i++) {
+      nn_log (cat, "(\"%s\",\"%s\",%d)",
+              xqos->property.value.props[i].name  ? xqos->property.value.props[i].name  : "nil",
+              xqos->property.value.props[i].value ? xqos->property.value.props[i].value : "nil",
+              (int)xqos->property.value.props[i].propagate);
+    }
+    nn_log (cat, "},{");
+    for (i = 0; i < xqos->property.binary_value.n; i++) {
+      nn_log (cat, "(\"%s\",<",
+              xqos->property.binary_value.props[i].name  ? xqos->property.binary_value.props[i].name : "nil");
+      log_octetseq (cat, xqos->property.binary_value.props[i].value.length, xqos->property.binary_value.props[i].value.value);
+      nn_log (cat, ">,%d)",
+              (int)xqos->property.binary_value.props[i].propagate);
+    }
+    nn_log (cat, "}}");
+  });
   DO (RTI_TYPECODE, {
     LOGB1 ("rti_typecode=%u<", xqos->rti_typecode.length);
     log_octetseq (cat, xqos->rti_typecode.length, xqos->rti_typecode.value);

@@ -132,9 +132,11 @@ void nn_xmsg_addpar_statusinfo (struct nn_xmsg *m, unsigned statusinfo);
 void nn_xmsg_addpar_reliability (struct nn_xmsg *m, unsigned pid, const struct nn_reliability_qospolicy *rq);
 void nn_xmsg_addpar_share (struct nn_xmsg *m, unsigned pid, const struct nn_share_qospolicy *rq);
 void nn_xmsg_addpar_subscription_keys (struct nn_xmsg *m, unsigned pid, const struct nn_subscription_keys_qospolicy *rq);
+void nn_xmsg_addpar_property (struct nn_xmsg *m, unsigned pid, const struct nn_property_qospolicy *rq, int forceBE);
 
 void nn_xmsg_addpar_parvinfo (struct nn_xmsg *m, unsigned pid, const struct nn_prismtech_participant_version_info *pvi);
 void nn_xmsg_addpar_eotinfo (struct nn_xmsg *m, unsigned pid, const struct nn_prismtech_eotinfo *txnid);
+void nn_xmsg_addpar_dataholder (struct nn_xmsg *m, unsigned pid, const struct nn_dataholder *dh, int forceBE);
 void nn_xmsg_addpar_sentinel (struct nn_xmsg *m);
 int nn_xmsg_addpar_sentinel_ifparam (struct nn_xmsg *m);
 
