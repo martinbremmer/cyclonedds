@@ -120,25 +120,25 @@ void nn_xmsg_submsg_setnext (struct nn_xmsg *msg, struct nn_xmsg_marker marker);
 void nn_xmsg_submsg_init (struct nn_xmsg *msg, struct nn_xmsg_marker marker, SubmessageKind_t smkind);
 void nn_xmsg_add_timestamp (struct nn_xmsg *m, nn_wctime_t t);
 void nn_xmsg_add_entityid (struct nn_xmsg * m);
-void *nn_xmsg_addpar (struct nn_xmsg *m, unsigned pid, size_t len);
-void nn_xmsg_addpar_string (struct nn_xmsg *m, unsigned pid, const char *str);
-void nn_xmsg_addpar_octetseq (struct nn_xmsg *m, unsigned pid, const nn_octetseq_t *oseq);
-void nn_xmsg_addpar_stringseq (struct nn_xmsg *m, unsigned pid, const nn_stringseq_t *sseq);
-void nn_xmsg_addpar_guid (struct nn_xmsg *m, unsigned pid, const nn_guid_t *guid);
+void *nn_xmsg_addpar (struct nn_xmsg *m, unsigned pid, size_t len, bool forceBE);
+void nn_xmsg_addpar_string (struct nn_xmsg *m, unsigned pid, const char *str, bool forceBE);
+void nn_xmsg_addpar_octetseq (struct nn_xmsg *m, unsigned pid, const nn_octetseq_t *oseq, bool forceBE);
+void nn_xmsg_addpar_stringseq (struct nn_xmsg *m, unsigned pid, const nn_stringseq_t *sseq, bool forceBE);
+void nn_xmsg_addpar_guid (struct nn_xmsg *m, unsigned pid, const nn_guid_t *guid, bool forceBE);
 void nn_xmsg_addpar_BE4u (struct nn_xmsg *m, unsigned pid, unsigned x);
 void nn_xmsg_addpar_4u (struct nn_xmsg *m, unsigned pid, unsigned x);
-void nn_xmsg_addpar_keyhash (struct nn_xmsg *m, const struct ddsi_serdata *serdata);
+void nn_xmsg_addpar_keyhash (struct nn_xmsg *m, const struct ddsi_serdata *serdata, bool forceBE, bool forceMD5);
 void nn_xmsg_addpar_statusinfo (struct nn_xmsg *m, unsigned statusinfo);
-void nn_xmsg_addpar_reliability (struct nn_xmsg *m, unsigned pid, const struct nn_reliability_qospolicy *rq);
-void nn_xmsg_addpar_share (struct nn_xmsg *m, unsigned pid, const struct nn_share_qospolicy *rq);
-void nn_xmsg_addpar_subscription_keys (struct nn_xmsg *m, unsigned pid, const struct nn_subscription_keys_qospolicy *rq);
-void nn_xmsg_addpar_property (struct nn_xmsg *m, unsigned pid, const struct nn_property_qospolicy *rq, int forceBE);
+void nn_xmsg_addpar_reliability (struct nn_xmsg *m, unsigned pid, const struct nn_reliability_qospolicy *rq, bool forceBE);
+void nn_xmsg_addpar_share (struct nn_xmsg *m, unsigned pid, const struct nn_share_qospolicy *rq, bool forceBE);
+void nn_xmsg_addpar_subscription_keys (struct nn_xmsg *m, unsigned pid, const struct nn_subscription_keys_qospolicy *rq, bool forceBE);
+void nn_xmsg_addpar_property (struct nn_xmsg *m, unsigned pid, const struct nn_property_qospolicy *rq, bool forceBE);
 
-void nn_xmsg_addpar_parvinfo (struct nn_xmsg *m, unsigned pid, const struct nn_prismtech_participant_version_info *pvi);
-void nn_xmsg_addpar_eotinfo (struct nn_xmsg *m, unsigned pid, const struct nn_prismtech_eotinfo *txnid);
-void nn_xmsg_addpar_dataholder (struct nn_xmsg *m, unsigned pid, const struct nn_dataholder *dh, int forceBE);
-void nn_xmsg_addpar_sentinel (struct nn_xmsg *m);
-int nn_xmsg_addpar_sentinel_ifparam (struct nn_xmsg *m);
+void nn_xmsg_addpar_parvinfo (struct nn_xmsg *m, unsigned pid, const struct nn_prismtech_participant_version_info *pvi, bool forceBE);
+void nn_xmsg_addpar_eotinfo (struct nn_xmsg *m, unsigned pid, const struct nn_prismtech_eotinfo *txnid, bool forceBE);
+void nn_xmsg_addpar_dataholder (struct nn_xmsg *m, unsigned pid, const struct nn_dataholder *dh, bool forceBE);
+void nn_xmsg_addpar_sentinel (struct nn_xmsg *m, bool forceBE);
+int nn_xmsg_addpar_sentinel_ifparam (struct nn_xmsg *m, bool forceBE);
 
 /* XPACK */
 

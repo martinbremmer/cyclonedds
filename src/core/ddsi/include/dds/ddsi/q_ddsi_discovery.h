@@ -40,6 +40,8 @@ int sedp_write_cm_subscriber (const struct nn_plist *datap, int alive);
 
 int builtins_dqueue_handler (const struct nn_rsample_info *sampleinfo, const struct nn_rdata *fragchain, const nn_guid_t *rdguid, void *qarg);
 
+void get_participant_builtin_topic_data(struct participant *pp, struct nn_xmsg *mpayload, bool forceBE);
+
 #if defined (__cplusplus)
 }
 #endif

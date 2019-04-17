@@ -449,10 +449,10 @@ static int create_fragment_message_simple (struct writer *wr, seqno_t seq, struc
 
   /* Adding parameters means potential reallocing, so sm, ddcmn now likely become invalid */
   if (wr->include_keyhash)
-    nn_xmsg_addpar_keyhash (*pmsg, serdata);
+    nn_xmsg_addpar_keyhash (*pmsg, serdata, false, /* TODO */false);
   if (serdata->statusinfo)
     nn_xmsg_addpar_statusinfo (*pmsg, serdata->statusinfo);
-  if (nn_xmsg_addpar_sentinel_ifparam (*pmsg) > 0)
+  if (nn_xmsg_addpar_sentinel_ifparam (*pmsg, false) > 0)
   {
     data = nn_xmsg_submsg_from_marker (*pmsg, sm_marker);
     data->x.smhdr.flags |= DATAFRAG_FLAG_INLINE_QOS;
@@ -618,13 +618,13 @@ int create_fragment_message (struct writer *wr, seqno_t seq, const struct nn_pli
     /* Adding parameters means potential reallocing, so sm, ddcmn now likely become invalid */
     if (wr->include_keyhash)
     {
-      nn_xmsg_addpar_keyhash (*pmsg, serdata);
+      nn_xmsg_addpar_keyhash (*pmsg, serdata, false, /* TODO */false);
     }
     if (serdata->statusinfo)
     {
       nn_xmsg_addpar_statusinfo (*pmsg, serdata->statusinfo);
     }
-    rc = nn_xmsg_addpar_sentinel_ifparam (*pmsg);
+    rc = nn_xmsg_addpar_sentinel_ifparam (*pmsg, false);
     if (rc > 0)
     {
       ddcmn = nn_xmsg_submsg_from_marker (*pmsg, sm_marker);

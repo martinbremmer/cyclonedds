@@ -459,6 +459,105 @@ int new_participant_guid (const nn_guid_t *ppguid, unsigned flags, const nn_plis
     DDS_LOG(DDS_LC_DISCOVERY, "}\n");
   }
 
+  if( config.omg_security_configuration /* TODO && (q_check_security_configuration( &(config.omg_security_configuration->cfg )) == 0) */)
+  {
+    unsigned i=0;
+    omg_security_configuration_type *cfg = &config.omg_security_configuration->cfg;
+    bool password_exists=false;
+    bool trusted_ca_dir_exists=false;
+    nn_property_t *properties;
+    unsigned source_size;
+    unsigned next_pp_size;
+
+    //if there is no data in the properties, the size is undetermined
+    if ( !( pp->plist->qos.present & QP_PROPERTY_LIST) )
+    {
+      pp->plist->qos.property.value.n = 0;
+      pp->plist->qos.property.binary_value.n = 0;
+      pp->plist->qos.property.binary_value.props = NULL;
+    }
+
+    //get size of next property array
+    source_size = pp->plist->qos.property.value.n;
+    next_pp_size =  source_size;
+
+    /*additional fields*/
+    next_pp_size += 6; /*Mandatory fields count for security*/
+    if( cfg->authentication_properties.password && strlen( cfg->authentication_properties.password) != 0  )
+    {
+      password_exists=true;
+      next_pp_size ++;
+    } else {
+      password_exists=false;
+    }
+
+    if( cfg->authentication_properties.trusted_ca_dir && strlen( cfg->authentication_properties.trusted_ca_dir) != 0  )
+    {
+      trusted_ca_dir_exists=true;
+      next_pp_size ++;
+    } else {
+      trusted_ca_dir_exists=false;
+    }
+
+    properties = ddsrt_malloc (next_pp_size * sizeof (nn_property_t));
+    for (i = 0; i < source_size; i++)
+    {
+      q_duplicate_property(&(properties[i]), &(pp->plist->qos.property.value.props[i]));
+    }
+
+    /* Fill the configuration into the qos */
+    properties[source_size].name = ddsrt_strdup("dds.sec.auth.identity_ca");
+    properties[source_size].value = ddsrt_strdup( cfg->authentication_properties.identity_ca);
+    properties[source_size].propagate = false;
+    properties[++source_size].name = ddsrt_strdup("dds.sec.auth.private_key");
+    properties[source_size].value = ddsrt_strdup( cfg->authentication_properties.private_key);
+    properties[source_size].propagate = false;
+    properties[++source_size].name = ddsrt_strdup("dds.sec.auth.identity_certificate");
+    properties[source_size].value = ddsrt_strdup( cfg->authentication_properties.identity_certificate);
+    properties[source_size].propagate = false;
+
+    properties[++source_size].name = ddsrt_strdup("dds.sec.access.permissions_ca");
+    properties[source_size].value = ddsrt_strdup( cfg->access_control_properties.permissions_ca);
+    properties[source_size].propagate = false;
+    properties[++source_size].name = ddsrt_strdup("dds.sec.access.governance");
+    properties[source_size].value = ddsrt_strdup( cfg->access_control_properties.governance);
+    properties[source_size].propagate = false;
+    properties[++source_size].name = ddsrt_strdup("dds.sec.access.permissions");
+    properties[source_size].value = ddsrt_strdup( cfg->access_control_properties.permissions);
+    properties[source_size].propagate = false;
+
+
+    if( password_exists )
+    {
+      properties[++source_size].name = ddsrt_strdup("dds.sec.auth.password");
+      properties[source_size].value = ddsrt_strdup( cfg->authentication_properties.password);
+      properties[source_size].propagate = false;
+    }
+
+    if( trusted_ca_dir_exists )
+    {
+      properties[++source_size].name = ddsrt_strdup("dds.sec.auth.trusted_ca_dir");
+      properties[source_size].value = ddsrt_strdup( cfg->authentication_properties.trusted_ca_dir);
+      properties[source_size].propagate = false;
+    }
+
+
+    //free the old properties if there is data on it
+    if (  pp->plist->qos.present & QP_PROPERTY_LIST)
+    {
+      q_free_propertyseq( &(pp->plist->qos.property.value) );
+    }
+
+    pp->plist->qos.property.value.props = properties;
+    pp->plist->qos.property.value.n = next_pp_size;
+
+    /* pp->plist->qos.property.binary_value will stay the same. */
+
+    pp->plist->qos.present |= QP_PROPERTY_LIST;
+
+    /* extended participant qos is ready */
+  }
+
   if (config.many_sockets_mode == MSM_MANY_UNICAST)
   {
     pp->m_conn = ddsi_factory_create_conn (gv.m_factory, 0, NULL);

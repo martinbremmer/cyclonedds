@@ -774,14 +774,14 @@ void nn_xmsg_setwriterseq_fragid (struct nn_xmsg *msg, const nn_guid_t *wrguid, 
 
 size_t nn_xmsg_add_string_padded(unsigned char *buf, char *str, bool forceBE)
 {
-  unsigned len = 0;
+  size_t len = 0;
   if (str) {
     len = (unsigned) strlen (str) + 1;
   }
   if (buf) {
     /* Add cdr string */
     struct cdrstring *p = (struct cdrstring *) buf;
-    p->length = (uint32_t)(forceBE ? toBE4u(len) : len);
+    p->length = forceBE ? toBE4u((uint32_t)len) : (uint32_t)len;
     if (str) {
       memcpy (p->contents, str, len);
       /* clear padding */
@@ -812,9 +812,11 @@ size_t nn_xmsg_add_octseq_padded(unsigned char *buf, nn_octetseq_t *seq, bool fo
          align4u(len); /* seqlen + possible padding */
 }
 
-unsigned nn_xmsg_add_propertyseq_padded (unsigned char *buf, const struct nn_propertyseq *ps, bool forceBE)
+size_t nn_xmsg_add_propertyseq_padded (unsigned char *buf, const struct nn_propertyseq *ps, bool forceBE)
 {
-  unsigned i, len, n = 0;
+  size_t len;
+  unsigned i;
+  uint32_t n = 0;
   unsigned *cnt = NULL;
 
   assert(ps);
@@ -846,9 +848,11 @@ unsigned nn_xmsg_add_propertyseq_padded (unsigned char *buf, const struct nn_pro
   return len;
 }
 
-unsigned nn_xmsg_add_binarypropertyseq_padded (unsigned char *buf, const struct nn_binarypropertyseq *bps, bool forceBE)
+size_t nn_xmsg_add_binarypropertyseq_padded (unsigned char *buf, const struct nn_binarypropertyseq *bps, bool forceBE)
 {
-  unsigned i, len, n = 0;
+  size_t len;
+  unsigned i;
+  uint32_t n = 0;
   unsigned *cnt = NULL;
 
   assert(bps);
@@ -879,9 +883,9 @@ unsigned nn_xmsg_add_binarypropertyseq_padded (unsigned char *buf, const struct 
   return len;
 }
 
-unsigned nn_xmsg_add_dataholder_padded (unsigned char *buf, const struct nn_dataholder *dh, bool forceBE)
+size_t nn_xmsg_add_dataholder_padded (unsigned char *buf, const struct nn_dataholder *dh, bool forceBE)
 {
-  unsigned len;
+  size_t len;
 
   len  = nn_xmsg_add_string_padded(buf, dh->class_id, forceBE);
   len += nn_xmsg_add_propertyseq_padded(buf ? &(buf[len]) : NULL, &(dh->properties), forceBE);
@@ -890,9 +894,9 @@ unsigned nn_xmsg_add_dataholder_padded (unsigned char *buf, const struct nn_data
   return len;
 }
 
-unsigned nn_xmsg_add_propertyqos_padded (_Inout_opt_ unsigned char *buf, _In_ const struct nn_property_qospolicy *pq, bool forceBE)
+size_t nn_xmsg_add_propertyqos_padded (unsigned char *buf, const struct nn_property_qospolicy *pq, bool forceBE)
 {
-  unsigned len;
+  size_t len;
 
   len  = nn_xmsg_add_propertyseq_padded(buf, &(pq->value), forceBE);
   len += nn_xmsg_add_binarypropertyseq_padded(buf ? &(buf[len]) : NULL, &(pq->binary_value), forceBE);
@@ -908,8 +912,8 @@ void * nn_xmsg_addpar (struct nn_xmsg *m, unsigned pid, size_t len, bool forceBE
   char *p;
   m->have_params = 1;
   phdr = nn_xmsg_append (m, NULL, sizeof (nn_parameter_t) + len4);
-  phdr->parameterid = (nn_parameterid_t) pid;
-  phdr->length = (unsigned short) len4;
+  phdr->parameterid = (nn_parameterid_t) (forceBE ? toBE2u((nn_parameterid_t)pid) : pid);
+  phdr->length = (unsigned short)(forceBE ? toBE2u((unsigned short) len4) : (unsigned short) len4);
   p = (char *) (phdr + 1);
   if (len4 > len)
   {
@@ -925,15 +929,15 @@ void nn_xmsg_addpar_string (struct nn_xmsg *m, unsigned pid, const char *str, bo
 {
   struct cdrstring *p;
   unsigned len = (unsigned) strlen (str) + 1;
-  p = nn_xmsg_addpar (m, pid, 4 + len);
-  p->length = len;
+  p = nn_xmsg_addpar (m, pid, 4 + len, forceBE);
+  p->length = forceBE ? toBE4u(len) : len;
   memcpy (p->contents, str, len);
 }
 
 void nn_xmsg_addpar_octetseq (struct nn_xmsg *m, unsigned pid, const nn_octetseq_t *oseq, bool forceBE)
 {
-  char *p = nn_xmsg_addpar (m, pid, 4 + oseq->length);
-  *((unsigned *) p) = oseq->length;
+  char *p = nn_xmsg_addpar (m, pid, 4 + oseq->length, forceBE);
+  *((unsigned *) p) = forceBE ? toBE4u(oseq->length) : oseq->length;
   memcpy (p + sizeof (int), oseq->value, oseq->length);
 }
 
@@ -945,34 +949,35 @@ void nn_xmsg_addpar_stringseq (struct nn_xmsg *m, unsigned pid, const nn_strings
 
   for (i = 0; i < sseq->n; i++)
   {
-    len += nn_xmsg_add_string_padded(NULL, sseq->strs[i]);
+    len += nn_xmsg_add_string_padded(NULL, sseq->strs[i], forceBE);
   }
 
-  tmp = nn_xmsg_addpar (m, pid, 4 + len);
+  tmp = nn_xmsg_addpar (m, pid, 4 + len, forceBE);
 
-  *((uint32_t *) tmp) = sseq->n;
+  *((uint32_t *) tmp) = forceBE ? toBE4u(sseq->n) : sseq->n;
   tmp += sizeof (uint32_t);
   for (i = 0; i < sseq->n; i++)
   {
-    tmp += nn_xmsg_add_string_padded(tmp, sseq->strs[i]);
+    tmp += nn_xmsg_add_string_padded(tmp, sseq->strs[i], forceBE);
   }
 }
 
-void nn_xmsg_addpar_keyhash (struct nn_xmsg *m, const struct ddsi_serdata *serdata, bool UNUSED_ARG(forceBE), int forceMD5)
+void nn_xmsg_addpar_keyhash (struct nn_xmsg *m, const struct ddsi_serdata *serdata, bool UNUSED_ARG(forceBE), bool UNUSED_ARG(forceMD5))
 {
   if (serdata->kind != SDK_EMPTY)
   {
     const struct ddsi_serdata_default *serdata_def = (const struct ddsi_serdata_default *)serdata;
-    char *p = nn_xmsg_addpar (m, PID_KEYHASH, 16);
+    char *p = nn_xmsg_addpar (m, PID_KEYHASH, 16, false);
+    /* TODO: Support MD5 keyhash. */
     memcpy (p, serdata_def->keyhash.m_hash, 16);
   }
 }
 
-void nn_xmsg_addpar_guid (struct nn_xmsg *m, unsigned pid, const nn_guid_t *guid)
+void nn_xmsg_addpar_guid (struct nn_xmsg *m, unsigned pid, const nn_guid_t *guid, bool forceBE)
 {
   unsigned *pu;
   int i;
-  pu = nn_xmsg_addpar (m, pid, 16);
+  pu = nn_xmsg_addpar (m, pid, 16, forceBE);
   for (i = 0; i < 3; i++)
   {
     pu[i] = toBE4u (guid->prefix.u[i]);
@@ -1017,13 +1022,13 @@ void nn_xmsg_addpar_reliability (struct nn_xmsg *m, unsigned pid, const struct n
 
 void nn_xmsg_addpar_4u (struct nn_xmsg *m, unsigned pid, unsigned x)
 {
-  unsigned *p = nn_xmsg_addpar (m, pid, 4);
+  unsigned *p = nn_xmsg_addpar (m, pid, 4, false);
   *p = x;
 }
 
 void nn_xmsg_addpar_BE4u (struct nn_xmsg *m, unsigned pid, unsigned x)
 {
-  unsigned *p = nn_xmsg_addpar (m, pid, 4);
+  unsigned *p = nn_xmsg_addpar (m, pid, 4, false);
   *p = toBE4u (x);
 }
 
@@ -1033,7 +1038,7 @@ void nn_xmsg_addpar_statusinfo (struct nn_xmsg *m, unsigned statusinfo)
     nn_xmsg_addpar_BE4u (m, PID_STATUSINFO, statusinfo);
   else
   {
-    unsigned *p = nn_xmsg_addpar (m, PID_STATUSINFO, 8);
+    unsigned *p = nn_xmsg_addpar (m, PID_STATUSINFO, 8, false);
     unsigned statusinfox = 0;
     assert ((statusinfo & ~NN_STATUSINFO_STANDARDIZED) == NN_STATUSINFO_OSPL_AUTO);
     if (statusinfo & NN_STATUSINFO_OSPL_AUTO)
@@ -1051,7 +1056,7 @@ void nn_xmsg_addpar_share (struct nn_xmsg *m, unsigned pid, const struct nn_shar
   const unsigned len = (q->enable ? (unsigned) strlen (q->name) : 0) + 1;
   unsigned char *p;
   struct cdrstring *ps;
-  p = nn_xmsg_addpar (m, pid, fixed_len + len);
+  p = nn_xmsg_addpar (m, pid, fixed_len + len, false);
   p[0] = q->enable;
   p[1] = 0;
   p[2] = 0;
@@ -1076,7 +1081,7 @@ void nn_xmsg_addpar_subscription_keys (struct nn_xmsg *m, unsigned pid, const st
     len += 4 + align4u (len1);
   }
 
-  tmp = nn_xmsg_addpar (m, pid, len);
+  tmp = nn_xmsg_addpar (m, pid, len, false);
 
   tmp[0] = q->use_key_list;
   for (i = 1; i < sizeof (int); i++)
@@ -1102,7 +1107,7 @@ void nn_xmsg_addpar_subscription_keys (struct nn_xmsg *m, unsigned pid, const st
 void nn_xmsg_addpar_property (struct nn_xmsg *m, unsigned pid, const struct nn_property_qospolicy *rq, bool forceBE)
 {
     unsigned char *tmp;
-    unsigned len;
+    size_t len;
 
     /* Get total payload length. */
     len = nn_xmsg_add_propertyqos_padded(NULL, rq, forceBE);
@@ -1116,14 +1121,14 @@ void nn_xmsg_addpar_property (struct nn_xmsg *m, unsigned pid, const struct nn_p
 
 void nn_xmsg_addpar_sentinel (struct nn_xmsg * m, bool forceBE)
 {
-  nn_xmsg_addpar (m, PID_SENTINEL, 0);
+  nn_xmsg_addpar (m, PID_SENTINEL, 0, forceBE);
 }
 
 int nn_xmsg_addpar_sentinel_ifparam (struct nn_xmsg * m, bool forceBE)
 {
   if (m->have_params)
   {
-    nn_xmsg_addpar_sentinel (m);
+    nn_xmsg_addpar_sentinel (m, forceBE);
     return 1;
   }
   return 0;
@@ -1138,22 +1143,22 @@ void nn_xmsg_addpar_parvinfo (struct nn_xmsg *m, unsigned pid, const struct nn_p
 
   /* pvi->internals cannot be NULL here */
   slen = (unsigned) strlen(pvi->internals) + 1; /* +1 for '\0' terminator */
-  pu = nn_xmsg_addpar (m, pid, NN_PRISMTECH_PARTICIPANT_VERSION_INFO_FIXED_CDRSIZE + slen);
-  pu[0] = pvi->version;
-  pu[1] = pvi->flags;
+  pu = nn_xmsg_addpar (m, pid, NN_PRISMTECH_PARTICIPANT_VERSION_INFO_FIXED_CDRSIZE + slen, forceBE);
+  pu[0] = forceBE ? toBE4u(pvi->version) : pvi->version;
+  pu[1] = forceBE ? toBE4u(pvi->flags) : pvi->flags;
   for (i = 0; i < 3; i++)
   {
-    pu[i+2] = (pvi->unused[i]);
+    pu[i+2] = forceBE ? toBE4u(pvi->unused[i]) : (pvi->unused[i]);
   }
   ps = (struct cdrstring *)&pu[5];
-  ps->length = slen;
+  ps->length = forceBE ? toBE4u(slen) : slen;
   memcpy(ps->contents, pvi->internals, slen);
 }
 
-void nn_xmsg_addpar_eotinfo (struct nn_xmsg *m, unsigned pid, const struct nn_prismtech_eotinfo *txnid)
+void nn_xmsg_addpar_eotinfo (struct nn_xmsg *m, unsigned pid, const struct nn_prismtech_eotinfo *txnid, bool UNUSED_ARG(forceBE))
 {
   uint32_t *pu, i;
-  pu = nn_xmsg_addpar (m, pid, 2 * sizeof (uint32_t) + txnid->n * sizeof (txnid->tids[0]));
+  pu = nn_xmsg_addpar (m, pid, 2 * sizeof (uint32_t) + txnid->n * sizeof (txnid->tids[0]), false);
   pu[0] = txnid->transactionId;
   pu[1] = txnid->n;
   for (i = 0; i < txnid->n; i++)
@@ -1166,7 +1171,7 @@ void nn_xmsg_addpar_eotinfo (struct nn_xmsg *m, unsigned pid, const struct nn_pr
 void nn_xmsg_addpar_dataholder (struct nn_xmsg *m, unsigned pid, const struct nn_dataholder *dh, bool forceBE)
 {
     unsigned char *tmp;
-    unsigned len;
+    size_t len;
 
     /* Get total payload length. */
     len = nn_xmsg_add_dataholder_padded(NULL, dh, forceBE);

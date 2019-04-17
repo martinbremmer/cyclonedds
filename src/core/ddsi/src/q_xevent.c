@@ -972,8 +972,8 @@ static bool resend_spdp_sample_by_guid_key (struct writer *wr, const nn_guid_t *
   ps.present |= PP_PARTICIPANT_GUID;
   ps.participant_guid = *guid;
   struct nn_xmsg *mpayload = nn_xmsg_new (gv.xmsgpool, &guid->prefix, 0, NN_XMSG_KIND_DATA);
-  nn_plist_addtomsg (mpayload, &ps, ~(uint64_t)0, ~(uint64_t)0);
-  nn_xmsg_addpar_sentinel (mpayload);
+  nn_plist_addtomsg (mpayload, &ps, ~(uint64_t)0, ~(uint64_t)0, false);
+  nn_xmsg_addpar_sentinel (mpayload, false);
   nn_plist_fini (&ps);
   struct ddsi_plist_sample plist_sample;
   nn_xmsg_payload_to_plistsample (&plist_sample, PID_PARTICIPANT_GUID, mpayload);

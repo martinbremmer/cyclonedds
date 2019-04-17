@@ -4543,20 +4543,20 @@ void nn_log_xqos (uint32_t cat, const nn_xqos_t *xqos)
     unsigned i;
     LOGB0 ("property={{");
     for (i = 0; i < xqos->property.value.n; i++) {
-      nn_log (cat, "(\"%s\",\"%s\",%d)",
+      DDS_LOG (cat, "(\"%s\",\"%s\",%d)",
               xqos->property.value.props[i].name  ? xqos->property.value.props[i].name  : "nil",
               xqos->property.value.props[i].value ? xqos->property.value.props[i].value : "nil",
               (int)xqos->property.value.props[i].propagate);
     }
-    nn_log (cat, "},{");
+    DDS_LOG (cat, "},{");
     for (i = 0; i < xqos->property.binary_value.n; i++) {
-      nn_log (cat, "(\"%s\",<",
+      DDS_LOG (cat, "(\"%s\",<",
               xqos->property.binary_value.props[i].name  ? xqos->property.binary_value.props[i].name : "nil");
       log_octetseq (cat, xqos->property.binary_value.props[i].value.length, xqos->property.binary_value.props[i].value.value);
-      nn_log (cat, ">,%d)",
+      DDS_LOG (cat, ">,%d)",
               (int)xqos->property.binary_value.props[i].propagate);
     }
-    nn_log (cat, "}}");
+    DDS_LOG (cat, "}}");
   });
   DO (RTI_TYPECODE, {
     LOGB1 ("rti_typecode=%u<", xqos->rti_typecode.length);

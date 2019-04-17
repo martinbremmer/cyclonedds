@@ -315,9 +315,9 @@ int spdp_write (struct participant *pp)
     qosdiff |= ~QP_UNRECOGNIZED_INCOMPATIBLE_MASK;
 
   assert (ps.qos.present == 0);
-  nn_plist_addtomsg (mpayload, &ps, ~(uint64_t)0, 0);
-  nn_plist_addtomsg (mpayload, pp->plist, 0, qosdiff);
-  nn_xmsg_addpar_sentinel (mpayload);
+  nn_plist_addtomsg (mpayload, &ps, ~(uint64_t)0, 0, /* TODO */false);
+  nn_plist_addtomsg (mpayload, pp->plist, 0, qosdiff, /* TODO */false);
+  nn_xmsg_addpar_sentinel (mpayload, /* TODO */false);
   nn_plist_fini (&ps);
 
   ret = write_mpayload (wr, 1, PID_PARTICIPANT_GUID, mpayload);
@@ -342,8 +342,8 @@ int spdp_dispose_unregister (struct participant *pp)
   nn_plist_init_empty (&ps);
   ps.present |= PP_PARTICIPANT_GUID;
   ps.participant_guid = pp->e.guid;
-  nn_plist_addtomsg (mpayload, &ps, ~(uint64_t)0, ~(uint64_t)0);
-  nn_xmsg_addpar_sentinel (mpayload);
+  nn_plist_addtomsg (mpayload, &ps, ~(uint64_t)0, ~(uint64_t)0, false);
+  nn_xmsg_addpar_sentinel (mpayload, false);
   nn_plist_fini (&ps);
 
   ret = write_mpayload (wr, 0, PID_PARTICIPANT_GUID, mpayload);
@@ -937,9 +937,9 @@ static int sedp_write_endpoint
      important, except that they need to be set to reasonable things
      or it'll crash */
   mpayload = nn_xmsg_new (gv.xmsgpool, &wr->e.guid.prefix, 0, NN_XMSG_KIND_DATA);
-  nn_plist_addtomsg (mpayload, &ps, ~(uint64_t)0, ~(uint64_t)0);
-  if (xqos) nn_xqos_addtomsg (mpayload, xqos, qosdiff);
-  nn_xmsg_addpar_sentinel (mpayload);
+  nn_plist_addtomsg (mpayload, &ps, ~(uint64_t)0, ~(uint64_t)0, false);
+  if (xqos) nn_xqos_addtomsg (mpayload, xqos, qosdiff, false);
+  nn_xmsg_addpar_sentinel (mpayload, false);
   nn_plist_fini (&ps);
 
   DDS_LOG(DDS_LC_DISCOVERY, "sedp: write for %x:%x:%x:%x via %x:%x:%x:%x\n", PGUID (*epguid), PGUID (wr->e.guid));
@@ -1390,8 +1390,8 @@ int sedp_write_topic (struct participant *pp, const struct nn_plist *datap)
   delta = nn_xqos_delta (&datap->qos, &gv.default_xqos_tp, ~(uint64_t)0);
   if (config.explicitly_publish_qos_set_to_default)
     delta |= ~QP_UNRECOGNIZED_INCOMPATIBLE_MASK;
-  nn_plist_addtomsg (mpayload, datap, ~(uint64_t)0, delta);
-  nn_xmsg_addpar_sentinel (mpayload);
+  nn_plist_addtomsg (mpayload, datap, ~(uint64_t)0, delta, false);
+  nn_xmsg_addpar_sentinel (mpayload, false);
 
   DDS_TRACE("sedp: write topic %s via %x:%x:%x:%x\n", datap->qos.topic_name, PGUID (sedp_wr->e.guid));
   ret = write_mpayload (sedp_wr, 1, PID_TOPIC_NAME, mpayload);
@@ -1428,7 +1428,7 @@ int sedp_write_cm_participant (struct participant *pp, int alive)
   nn_plist_init_empty (&ps);
   ps.present = PP_PARTICIPANT_GUID;
   ps.participant_guid = pp->e.guid;
-  nn_plist_addtomsg (mpayload, &ps, ~(uint64_t)0, ~(uint64_t)0);
+  nn_plist_addtomsg (mpayload, &ps, ~(uint64_t)0, ~(uint64_t)0, false);
   nn_plist_fini (&ps);
   if (alive)
   {
@@ -1436,9 +1436,9 @@ int sedp_write_cm_participant (struct participant *pp, int alive)
                        PP_PRISMTECH_NODE_NAME | PP_PRISMTECH_EXEC_NAME | PP_PRISMTECH_PROCESS_ID |
                        PP_PRISMTECH_WATCHDOG_SCHEDULING | PP_PRISMTECH_LISTENER_SCHEDULING |
                        PP_PRISMTECH_SERVICE_TYPE | PP_ENTITY_NAME,
-                       QP_PRISMTECH_ENTITY_FACTORY);
+                       QP_PRISMTECH_ENTITY_FACTORY, false);
   }
-  nn_xmsg_addpar_sentinel (mpayload);
+  nn_xmsg_addpar_sentinel (mpayload, false);
 
   DDS_TRACE("sedp: write CMParticipant ST%x for %x:%x:%x:%x via %x:%x:%x:%x\n",
           alive ? 0 : NN_STATUSINFO_DISPOSE | NN_STATUSINFO_UNREGISTER, PGUID (pp->e.guid), PGUID (sedp_wr->e.guid));
@@ -1532,8 +1532,8 @@ int sedp_write_cm_publisher (const struct nn_plist *datap, int alive)
     if (!config.explicitly_publish_qos_set_to_default)
       delta |= ~QP_UNRECOGNIZED_INCOMPATIBLE_MASK;
   }
-  nn_plist_addtomsg (mpayload, datap, ~(uint64_t)0, delta);
-  nn_xmsg_addpar_sentinel (mpayload);
+  nn_plist_addtomsg (mpayload, datap, ~(uint64_t)0, delta, false);
+  nn_xmsg_addpar_sentinel (mpayload, false);
   ret = write_mpayload (sedp_wr, alive, PID_GROUP_GUID ,mpayload);
   nn_xmsg_free (mpayload);
   return ret;
@@ -1568,8 +1568,8 @@ int sedp_write_cm_subscriber (const struct nn_plist *datap, int alive)
     if (!config.explicitly_publish_qos_set_to_default)
       delta |= ~QP_UNRECOGNIZED_INCOMPATIBLE_MASK;
   }
-  nn_plist_addtomsg (mpayload, datap, ~(uint64_t)0, delta);
-  nn_xmsg_addpar_sentinel (mpayload);
+  nn_plist_addtomsg (mpayload, datap, ~(uint64_t)0, delta, false);
+  nn_xmsg_addpar_sentinel (mpayload, false);
   ret = write_mpayload (sedp_wr, alive, PID_GROUP_GUID, mpayload);
   nn_xmsg_free (mpayload);
   return ret;
