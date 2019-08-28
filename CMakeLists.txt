@@ -103,13 +103,15 @@ if("${CMAKE_C_COMPILER_ID}" STREQUAL "Clang" OR
              "-Wmissing-prototypes"
              "-Winfinite-recursion"
              "-Wassign-enum"
-             "-Wcomma"
              "-Wmissing-prototypes"
              "-Wdocumentation"
              "-Wstrict-prototypes"
              "-Wconditional-uninitialized"
              "-Wshadow")
   add_compile_options(${wflags})
+  if (CMAKE_C_COMPILER_VERSION VERSION_GREATER_EQUAL 3.9)
+    add_compile_options(-Wcomma)
+  endif()
   if(${WERROR})
     add_compile_options(-Werror)
   endif()
