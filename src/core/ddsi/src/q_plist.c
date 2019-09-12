@@ -115,10 +115,10 @@ struct piddesc {
   size_t plist_offset;   /* offset from start of nn_plist_t */
   size_t size;           /* in-memory size for copying */
   union {
-    /* descriptor for generic code: 11 is enough for the current set of
+    /* descriptor for generic code: 12 is enough for the current set of
        parameters, compiler will warn if one ever tries to use more than
        will fit; on non-GCC/Clang and 32-bits machines */
-    const enum pserop desc[11];
+    const enum pserop desc[12];
     struct {
       dds_return_t (*deser) (void * __restrict dst, size_t * __restrict dstoff, struct flagset *flagset, uint64_t flag, const struct dd * __restrict dd, size_t * __restrict srcoff);
       dds_return_t (*ser) (struct nn_xmsg *xmsg, nn_parameterid_t pid, const void *src, size_t srcoff);
@@ -1036,6 +1036,13 @@ static dds_return_t dvx_reader_favours_ssm (void * __restrict dst, const struct 
 /* pserop representation of dds_property_qospolicy_t. */
 #define PROPERTY_POLICY_PSEROP      PROPERTYSEQ_PSEROP, BINPROPERTYSEQ_PSEROP
 
+/* pserop representation of nn_token_t. */
+#define TOKEN_PSEROP                XS, PROPERTYSEQ_PSEROP, BINPROPERTYSEQ_PSEROP
+
+/* pserop representation of nn_datatags_t. */
+#define DATATAGS_PSEROP             XQ, XS, XS, XSTOP
+
+
 /* Standardized parameters -- QoS _MUST_ come first (nn_plist_init_tables verifies this) because
    it allows early-out when processing a dds_qos_t instead of an nn_plist_t */
 static const struct piddesc piddesc_omg[] = {
@@ -1082,6 +1089,12 @@ static const struct piddesc piddesc_omg[] = {
 #ifdef DDSI_INCLUDE_SSM
   PPV (READER_FAVOURS_SSM,                  reader_favours_ssm, Xu),
 #endif
+  PP  (ENDPOINT_SECURITY_INFO,              endpoint_security_info, Xu, Xu),
+  PP  (PARTICIPANT_SECURITY_INFO,           participant_security_info, Xu, Xu),
+  PP  (IDENTITY_TOKEN,                      identity_token, TOKEN_PSEROP),
+  PP  (PERMISSIONS_TOKEN,                   permissions_token, TOKEN_PSEROP),
+  PP  (IDENTITY_STATUS_TOKEN,               identity_status_token, TOKEN_PSEROP),
+  PP  (DATA_TAGS,                           data_tags, DATATAGS_PSEROP),
   { PID_STATUSINFO, PDF_FUNCTION, PP_STATUSINFO, "STATUSINFO",
     offsetof (struct nn_plist, statusinfo), membersize (struct nn_plist, statusinfo),
     { .f = { .deser = deser_statusinfo, .ser = ser_statusinfo } }, 0 },
@@ -1197,11 +1210,10 @@ struct piddesc_index {
    nn_plist_init_tables.
 
    FIXME: should compute them at build-time */
-#ifdef DDSI_INCLUDE_SSM
-static const struct piddesc *piddesc_omg_index[115];
-#else /* status info is the highest */
-static const struct piddesc *piddesc_omg_index[114];
-#endif
+#define IS_SECURITY_PID(pid) ((pid >= PID_IDENTITY_TOKEN) && (pid <= PID_IDENTITY_STATUS_TOKEN))
+#define SECURITY_PID_TO_INDEX(pid) (pid - PID_IDENTITY_TOKEN + MAX_DEFAULT_OMG_PID + 1)
+#define PID_TO_INDEX(pid) (size_t)(IS_SECURITY_PID((size_t)pid) ? SECURITY_PID_TO_INDEX((size_t)pid) : (size_t)pid)
+static const struct piddesc *piddesc_omg_index[MAX_DEFAULT_OMG_PID+(PID_IDENTITY_STATUS_TOKEN-PID_IDENTITY_TOKEN)+2];
 static const struct piddesc *piddesc_eclipse_index[19];
 static const struct piddesc *piddesc_prismtech_index[19];
 
@@ -1227,8 +1239,8 @@ static const struct piddesc_index piddesc_vendor_index[] = {
 /* List of entries that require unalias, fini processing;
    initialized by nn_plist_init_tables; will assert when
    table too small or too large */
-static const struct piddesc *piddesc_unalias[19];
-static const struct piddesc *piddesc_fini[19];
+static const struct piddesc *piddesc_unalias[23];
+static const struct piddesc *piddesc_fini[23];
 static ddsrt_once_t table_init_control = DDSRT_ONCE_INIT;
 
 static nn_parameterid_t pid_without_flags (nn_parameterid_t pid)
@@ -1263,6 +1275,7 @@ static void nn_plist_init_tables_real (void)
     for (size_t j = 0; table[j].pid != PID_SENTINEL; j++)
     {
       nn_parameterid_t pid = pid_without_flags (table[j].pid);
+      size_t pididx = PID_TO_INDEX(pid);
 #ifndef NDEBUG
       /* Table must first list QoS, then other parameters */
       assert (only_qos_seen || !(table[j].flags & PDF_QOS));
@@ -1278,11 +1291,11 @@ static void nn_plist_init_tables_real (void)
          because they don't map to an entry */
       if (pid == PID_PAD)
         continue;
-      assert (pid <= piddesc_vendor_index[i].index_max);
-      assert (index[pid] == NULL || index[pid] == &table[j]);
-      index[pid] = &table[j];
+      assert (pididx <= piddesc_vendor_index[i].index_max);
+      assert (index[pididx] == NULL || index[pididx] == &table[j]);
+      index[pididx] = &table[j];
     }
-    assert (maxpid == piddesc_vendor_index[i].index_max);
+    assert (PID_TO_INDEX(maxpid) == piddesc_vendor_index[i].index_max);
   }
 
   /* PIDs requiring unalias; there is overlap between the tables
@@ -2003,7 +2016,8 @@ static dds_return_t init_one_parameter (nn_plist_t *plist, nn_ipaddress_params_t
     index = &piddesc_vendor_index[dd->vendorid.id[1]];
 
   const struct piddesc *entry;
-  if (pid_without_flags (pid) > index->index_max || (entry = index->index[pid_without_flags (pid)]) == NULL)
+  size_t pididx = PID_TO_INDEX(pid_without_flags (pid));
+  if (pididx > index->index_max || (entry = index->index[pididx]) == NULL)
     return return_unrecognized_pid (plist, pid);
   assert (pid_without_flags (pid) == pid_without_flags (entry->pid));
   if (pid != entry->pid)
