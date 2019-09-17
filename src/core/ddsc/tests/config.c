@@ -10,6 +10,7 @@
  * SPDX-License-Identifier: EPL-2.0 OR BSD-3-Clause
  */
 #include <stdlib.h>
+#include <assert.h>
 
 #include "dds/dds.h"
 #include "CUnit/Test.h"
@@ -75,3 +76,131 @@ CU_Test(ddsc_config, simple_udp, .init = ddsrt_init, .fini = ddsrt_fini) {
 
     dds_delete(participant);
 }
+
+static uint32_t found;
+static void logged(void *ptr, const dds_log_data_t *data)
+{
+    char **expected = (char**)ptr;
+    assert(ptr);
+    assert(data);
+    assert(data->message);
+    for (uint32_t i = 0; expected[i] != NULL; i++) {
+        if (strncmp(expected[i], data->message, strlen(expected[i])) == 0) {
+            found |= (uint32_t)(1 << i);
+        }
+    }
+}
+
+CU_Test(ddsc_config, security_empty, .init = ddsrt_init, .fini = ddsrt_fini) {
+
+    /* Expected traces when creating participant with an empty security element. */
+    const char *empty_expected[] = {
+#ifndef ENABLE_OMG_DDS_SECURITY
+      "config: //CycloneDDS/Domain: DDSSecurity: unknown element",
+#else
+      "config: //CycloneDDS/Domain/DDSSecurity/Authentication/IdentityCertificate/#text: element missing in configuration",
+      "config: //CycloneDDS/Domain/DDSSecurity/Authentication/IdentityCA/#text: element missing in configuration",
+      "config: //CycloneDDS/Domain/DDSSecurity/Authentication/PrivateKey/#text: element missing in configuration",
+#endif
+      NULL
+    };
+
+    dds_entity_t participant;
+
+    /* Set up the trace sinks to detect the config parsing. */
+    dds_set_log_mask(DDS_LC_FATAL|DDS_LC_ERROR|DDS_LC_WARNING|DDS_LC_CONFIG);
+    dds_set_log_sink(&logged, (void*)empty_expected);
+    dds_set_trace_sink(&logged, (void*)empty_expected);
+
+    /* Create participant with an empty security element. */
+    found = 0;
+    ddsrt_setenv(URI_VARIABLE, "<DDSSecurity/>");
+    participant = dds_create_participant(DDS_DOMAIN_DEFAULT, NULL, NULL);
+    ddsrt_setenv(URI_VARIABLE, "");
+    CU_ASSERT_FATAL(participant < 0);
+
+    /* All traces should have been provided. */
+#ifndef ENABLE_OMG_DDS_SECURITY
+    CU_ASSERT_FATAL(found == 0x1);
+#else
+    CU_ASSERT_FATAL(found == 0x7);
+#endif
+}
+
+CU_Test(ddsc_config, security, .init = ddsrt_init, .fini = ddsrt_fini) {
+
+    /* Expected traces when creating participant with the security elements. */
+    const char *sec_expected[] = {
+#ifndef ENABLE_OMG_DDS_SECURITY
+      "config: //CycloneDDS/Domain: DDSSecurity: unknown element",
+#else
+      "config: Domain/DDSSecurity/Authentication/Library/#text: dds_security_auth",
+      "config: Domain/DDSSecurity/Authentication/Library[@path]: dds_security_auth",
+      "config: Domain/DDSSecurity/Authentication/Library[@initFunction]: init_authentication",
+      "config: Domain/DDSSecurity/Authentication/Library[@finalizeFunction]: finalize_authentication",
+      "config: Domain/DDSSecurity/Authentication/IdentityCertificate/#text: testtext_IdentityCertificate_testtext",
+      "config: Domain/DDSSecurity/Authentication/IdentityCA/#text: testtext_IdentityCA_testtext",
+      "config: Domain/DDSSecurity/Authentication/PrivateKey/#text: testtext_PrivateKey_testtext",
+      "config: Domain/DDSSecurity/Authentication/Password/#text: testtext_Password_testtext",
+      "config: Domain/DDSSecurity/Authentication/TrustedCADirectory/#text:",
+      "config: Domain/DDSSecurity/AccessControl/Library/#text: dds_security_ac",
+      "config: Domain/DDSSecurity/AccessControl/Library[@path]: dds_security_ac",
+      "config: Domain/DDSSecurity/AccessControl/Library[@initFunction]: init_ac",
+      "config: Domain/DDSSecurity/AccessControl/Library[@finalizeFunction]: finalize_ac",
+      "config: Domain/DDSSecurity/AccessControl/PermissionsCA/#text: file:Permissions_CA.pem",
+      "config: Domain/DDSSecurity/AccessControl/Governance/#text: file:Governance.p7s",
+      "config: Domain/DDSSecurity/AccessControl/Permissions/#text: file:Permissions.p7s",
+      "config: Domain/DDSSecurity/Cryptographic/Library/#text: dds_security_crypto",
+      "config: Domain/DDSSecurity/Cryptographic/Library[@path]: dds_security_crypto",
+      "config: Domain/DDSSecurity/Cryptographic/Library[@initFunction]: init_crypto",
+      "config: Domain/DDSSecurity/Cryptographic/Library[@finalizeFunction]: finalize_crypto",
+#endif
+      NULL
+    };
+
+    const char *sec_config =
+      "<Tracing><Verbosity>finest</></>"
+      "<DDSSecurity>"
+        "<Authentication>"
+          "<Library path=\"dds_security_auth\" initFunction=\"init_authentication\" finalizeFunction=\"finalize_authentication\" />"
+          "<IdentityCertificate>testtext_IdentityCertificate_testtext</IdentityCertificate>"
+          "<IdentityCA>testtext_IdentityCA_testtext</IdentityCA>"
+          "<PrivateKey>testtext_PrivateKey_testtext</PrivateKey>"
+          "<Password>testtext_Password_testtext</Password>"
+        "</Authentication>"
+          "<Cryptographic>"
+            "<Library path=\"dds_security_crypto\" initFunction=\"init_crypto\" finalizeFunction=\"finalize_crypto\"/>"
+          "</Cryptographic>"
+        "<AccessControl>"
+          "<Library path=\"dds_security_ac\" initFunction=\"init_ac\" finalizeFunction=\"finalize_ac\"/>"
+          "<Governance>file:Governance.p7s</Governance>"
+          "<PermissionsCA>file:Permissions_CA.pem</PermissionsCA>"
+          "<Permissions>file:Permissions.p7s</Permissions>"
+        "</AccessControl>"
+      "</DDSSecurity>";
+
+
+    dds_entity_t participant;
+
+    ddsrt_setenv(URI_VARIABLE, sec_config);
+
+    /* Set up the trace sinks to detect the config parsing. */
+    dds_set_log_mask(DDS_LC_FATAL|DDS_LC_ERROR|DDS_LC_WARNING|DDS_LC_CONFIG);
+    dds_set_log_sink(&logged, (void*)sec_expected);
+    dds_set_trace_sink(&logged, (void*)sec_expected);
+
+    /* Create participant with security elements. */
+    found = 0;
+    ddsrt_setenv(URI_VARIABLE, sec_config);
+    participant = dds_create_participant(DDS_DOMAIN_DEFAULT, NULL, NULL);
+    ddsrt_setenv(URI_VARIABLE, "");
+    dds_delete(participant);
+
+    /* All traces should have been provided. */
+#ifndef ENABLE_OMG_DDS_SECURITY
+    CU_ASSERT_FATAL(found == 0x1);
+#else
+    CU_ASSERT_FATAL(found == 0xfffff);
+#endif
+}
+
