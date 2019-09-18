@@ -10,13 +10,14 @@ DDS Security to Cyclone DDS.
 This document can be removed when DDS Security has been implemented.
 
 **Table of contents**
-- [Multi process testing (in progress)](#testing)
-- [Runtime library loading](#loading)
+- [Multi process testing (done)](#testing)
+- [Runtime library loading (done)](#loading)
 - [Hopscotch utility (done)](#hopscotch)
 - [FSM utility](#fsm)
-- [Port DDS Security plugin API](#port-api)
-- [De-Serializing in DDSI](#deserializing)
-- [Port DDS Security builtin plugins](#port-plugins)
+- [Port DDS Security plugin API (done)](#port-api)
+- [De-Serializing messages in DDSI](#deserializing)
+- [De-Serializing security message parameters in DDSI (in progress)](#deserializing_plist)
+- [Port DDS Security builtin plugins (in progress)](#port-plugins)
 - [Port DDSI DDS Security](#port-ddsi)
 - [Move configuration](#Move-configuration)
 - [Failure handling](#failures)
@@ -26,7 +27,7 @@ This document can be removed when DDS Security has been implemented.
 - [Data Tags (optional)](#datatags)
 
 
-## Multi process testing (in progress)<a name="testing" />
+## Multi process testing (done)<a name="testing" />
 
 To properly test DDS Security, multi process testing will be necessary.
 This is not yet available in Cyclone DDS.
@@ -34,7 +35,7 @@ See the [Multi Process Testing](multi_process_testing.md) document for
 more information.
 
 
-## Runtime library loading<a name="loading" />
+## Runtime library loading (done)<a name="loading" />
 
 The ddsi component needs to be able to load DDS Security plugins at runtime.
 These plugins are provided as libraries.<br>
@@ -61,7 +62,7 @@ porting.
 The related DBTs should also be ported to Cyclone unit tests.
 
 
-## Port DDS Security plugin API<a name="port-api" />
+## Port DDS Security plugin API (done)<a name="port-api" />
 
 The DDS Security plugin API are just a few header files. The ddsi component
 uses that to link against. The implementation of the API is done in the
@@ -76,7 +77,7 @@ Maybe add some CMake module for both ddsi and the plugins to easily link
 against?
 
 
-## De-Serializing in DDSI<a name="deserializing" />
+## De-Serializing messages in DDSI<a name="deserializing" />
 
 DDSI needs to be able to (de)serialize a few Security messages. In OpenSplice,
 some functionality of the database is used. This is unavailable in Cyclone.
@@ -89,7 +90,13 @@ the m_ops sequences, message structs (if not yet available) and some
 convenience functions using both.
 
 
-## Port DDS Security builtin plugins<a name="port-plugins" />
+## De-Serializing security message parameters in DDSI (in progress)<a name="deserializing_plist" />
+
+DDSI needs to be able to (de)serialize a few message parameters that have
+been introduced by the DDS Security spec.
+
+
+## Port DDS Security builtin plugins (in progress)<a name="port-plugins" />
 
 No major changes between the DDS Security plugins in OpenSplice and Cyclone
 are expected.
@@ -107,6 +114,10 @@ porting effort is expected (i.e. let it work with cmake and runner generation).
 
 This means some additional effort, compared to just a code drop. But it is not
 expected to be major.
+
+- Authentication plugin (in progress)
+- Access Control plugin (todo)
+- Cryptography plugin (todo)
 
 
 ## Port DDSI DDS Security<a name="port-ddsi" />
@@ -130,10 +141,11 @@ between the DDSI code bases that could impact the merging work:
 
 The buildsystem has to be upgraded.<br>
 - A few files are added which are easy to add to cmake.<br>
-- There's a new dependency on the [DDS Security API](#port-api).
+- There's a new dependency on the [DDS Security API](#port-api), which is done.
 
 Then, of course, there are the tests<br>
-First of all, [Multi Process Testing](#testing) should be available.<br>
+First of all, [Multi Process Testing](#testing) should be available, which now
+it is.<br>
 When that's the case, then the OpenSplice tests business
 logic have to be ported from scripts and applications to that new framework.
 That porting shouldn't be that hard. However, it will probably take a while.
