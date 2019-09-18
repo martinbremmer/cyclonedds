@@ -158,7 +158,6 @@ different pull requests. Examples are
 - Add DDS Security endpoints that are non-volatile.
 - Add DDS Security endpoint that is volatile. This change has more impact than
   all the non-volatile endpoints combined.
-- Validate local participants and endpoints.
 - Handshake.
 - Payload (en)(de)coding.
 - Submsg (en)(de)coding.
