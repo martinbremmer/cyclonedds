@@ -152,10 +152,9 @@ That porting shouldn't be that hard. However, it will probably take a while.
 
 The DDSI Port doesn't have to be a big bang. It can be split up into various
 different pull requests. Examples are
-- Extend configuration XML parsing with the security configuration.
+- Extend configuration XML parsing with the security configuration (in progress).
 - Extend nn_qos with security related policies. Fill them with values from the
-  configuration when applicable.
-- Extend parameter list sending/receiving with security parameters.
+  configuration when applicable (in progress).
 - Add DDS Security endpoints that are non-volatile.
 - Add DDS Security endpoint that is volatile. This change has more impact than
   all the non-volatile endpoints combined.
