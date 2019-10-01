@@ -221,6 +221,11 @@ XML. Depending on if we keep or remove the XML configuration option, a lot of
 tests have to be updated, or a few added (that test security configuration
 through QoS).
 
+For the loading of the plugin libraries, properties with specific names have to
+be added to the property policy to know the location and names of the plugins.
+As inspiration, fastrtps can be used:
+https://github.com/ros2/rmw_fastrtps/blob/master/rmw_fastrtps_shared_cpp/src/rmw_node.cpp#L296
+
 
 ## Failure handling<a name="failures" />
 
