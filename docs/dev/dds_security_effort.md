@@ -16,7 +16,7 @@ This document can be removed when DDS Security has been implemented.
 - [FSM utility](#fsm)
 - [Port DDS Security plugin API (done)](#port-api)
 - [De-Serializing messages in DDSI](#deserializing)
-- [De-Serializing security message parameters in DDSI (in progress)](#deserializing_plist)
+- [De-Serializing security message parameters in DDSI (done)](#deserializing_plist)
 - [Port DDS Security builtin plugins (in progress)](#port-plugins)
 - [Port DDSI DDS Security](#port-ddsi)
 - [Move configuration](#Move-configuration)
@@ -90,7 +90,7 @@ the m_ops sequences, message structs (if not yet available) and some
 convenience functions using both.
 
 
-## De-Serializing security message parameters in DDSI (in progress)<a name="deserializing_plist" />
+## De-Serializing security message parameters in DDSI (done)<a name="deserializing_plist" />
 
 DDSI needs to be able to (de)serialize a few message parameters that have
 been introduced by the DDS Security spec.
