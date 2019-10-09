@@ -16,7 +16,7 @@
 
 #include "dds/ddsrt/endian.h"
 #include "dds/ddsrt/misc.h"
-#include "dds/ddsi/q_rtps.h" /* for nn_guid_t, nn_guid_prefix_t */
+#include "dds/ddsi/q_rtps.h" /* for ddsi_guid_t, ddsi_guid_prefix_t */
 #include "dds/ddsi/q_protocol.h" /* for nn_sequence_number_t */
 
 #if defined (__cplusplus)

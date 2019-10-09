@@ -125,9 +125,11 @@ target_sources(ddsc
 
 if(ENABLE_SECURITY)
   PREPEND(security_srcs "${CMAKE_CURRENT_LIST_DIR}/src"
+          ddsi_omg_security.c
           ddsi_security_msg.c)
 
   PREPEND(security_hdrs "${CMAKE_CURRENT_LIST_DIR}/include/dds/ddsi"
+          ddsi_omg_security.h
           ddsi_security_msg.h)
 
   target_sources(ddsc

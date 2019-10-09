@@ -12,7 +12,7 @@
 #ifndef Q_TRANSMIT_H
 #define Q_TRANSMIT_H
 
-#include "dds/ddsi/q_rtps.h" /* for nn_entityid_t */
+#include "dds/ddsi/q_rtps.h" /* for ddsi_entityid_t */
 
 #if defined (__cplusplus)
 extern "C" {

@@ -172,6 +172,9 @@ typedef struct nn_security_info
 #define NN_PLUGIN_PARTICIPANT_SECURITY_ATTRIBUTES_FLAG_IS_RTPS_AUTHENTICATED           (1u <<  3)
 #define NN_PLUGIN_PARTICIPANT_SECURITY_ATTRIBUTES_FLAG_IS_DISCOVERY_AUTHENTICATED      (1u <<  4)
 #define NN_PLUGIN_PARTICIPANT_SECURITY_ATTRIBUTES_FLAG_IS_LIVELINESS_AUTHENTICATED     (1u <<  5)
+#else
+struct nn_security_info;
+typedef struct nn_security_info nn_security_info_t;
 #endif
 
 
@@ -212,8 +215,8 @@ typedef struct nn_plist {
   ddsi_guid_t endpoint_guid;
   ddsi_guid_t group_guid;
 #if 0 /* reserved, rather than NIY */
-  nn_entityid_t participant_entityid;
-  nn_entityid_t group_entityid;
+  ddsi_entityid_t participant_entityid;
+  ddsi_entityid_t group_entityid;
 #endif
   uint32_t builtin_endpoint_set;
   uint32_t prismtech_builtin_endpoint_set;

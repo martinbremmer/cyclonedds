@@ -182,7 +182,7 @@ static void trace_msg (struct xeventq *evq, const char *func, const struct nn_xm
 {
   if (dds_get_log_mask() & DDS_LC_TRACE)
   {
-    nn_guid_t wrguid;
+    ddsi_guid_t wrguid;
     seqno_t wrseq;
     nn_fragment_number_t wrfragid;
     nn_xmsg_guid_seq_fragid (m, &wrguid, &wrseq, &wrfragid);

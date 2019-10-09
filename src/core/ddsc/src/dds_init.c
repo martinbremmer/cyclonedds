@@ -33,6 +33,10 @@
 #include "dds/ddsi/q_globals.h"
 #include "dds/version.h"
 
+#ifdef DDSI_INCLUDE_SECURITY
+#include "dds/ddsi/ddsi_omg_security.h"
+#endif
+
 static void dds_close (struct dds_entity *e);
 static dds_return_t dds_fini (struct dds_entity *e);
 
@@ -119,6 +123,10 @@ dds_return_t dds_init (void)
     goto fail_handleserver;
   }
 
+#ifdef DDSI_INCLUDE_SECURITY
+  q_omg_security_init();
+#endif
+
   dds_entity_init (&dds_global.m_entity, NULL, DDS_KIND_CYCLONEDDS, NULL, NULL, 0);
   dds_global.m_entity.m_iid = ddsi_iid_gen ();
   dds_global.m_entity.m_flags = DDS_ENTITY_IMPLICIT;
@@ -160,6 +168,9 @@ static dds_return_t dds_fini (struct dds_entity *e)
   assert (ddsrt_atomic_ld32 (&dds_state) == CDDS_STATE_STOPPING);
   dds_entity_final_deinit_before_free (e);
   common_cleanup ();
+#ifdef DDSI_INCLUDE_SECURITY
+  q_omg_security_deinit();
+#endif
   ddsrt_mutex_unlock (init_mutex);
   ddsrt_fini ();
   return DDS_RETCODE_NO_DATA;
