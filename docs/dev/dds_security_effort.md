@@ -10,21 +10,42 @@ DDS Security to Cyclone DDS.
 This document can be removed when DDS Security has been implemented.
 
 **Table of contents**
+- [Footprint](#footprint)
 - [Multi process testing (done)](#testing)
 - [Runtime library loading (done)](#loading)
 - [Hopscotch utility (done)](#hopscotch)
 - [FSM utility](#fsm)
 - [Port DDS Security plugin API (done)](#port-api)
-- [De-Serializing messages in DDSI](#deserializing)
+- [De-Serializing messages in DDSI (done)](#deserializing)
 - [De-Serializing security message parameters in DDSI (done)](#deserializing_plist)
 - [Port DDS Security builtin plugins (in progress)](#port-plugins)
-- [Port DDSI DDS Security](#port-ddsi)
-- [Move configuration](#Move-configuration)
+- [Port DDSI DDS Security (in progress)](#port-ddsi)
+- [Move configuration (in progress)](#Move-configuration)
 - [Failure handling](#failures)
 - [Multiple configurations](#multiple-configurations)
 - [Example](#example)
 - [QosProvider](#qosprovider)
 - [Data Tags (optional)](#datatags)
+
+
+## Footprint<a name="footprint" />
+
+A non-functional requirement is that cyclonedds should be buildable without
+the DDS Security support in it. That will reduce the footprint (and possibly
+improve performance) for applications that don't need security.
+
+For that, the ENABLE_SECURITY build option is introduced that translates into
+the DDSI_INCLUDE_SECURITY compile switch. However, the usage of that switch
+should not explode. That'll reduce the maintainability.
+
+For instance, the usage of the switch can be minimized by using functions that
+will reduce to an inline function that just returns a hardcode value when
+security is not included (otherwise they'll do some certain task).
+The compiler can use these inline functions to do clever stuff regarding
+footprint and performance.
+
+There can be other solutions to decrease security footprint without impeding
+on the maintainability of the code by inserting the switch too much.
 
 
 ## Multi process testing (done)<a name="testing" />
@@ -77,7 +98,7 @@ Maybe add some CMake module for both ddsi and the plugins to easily link
 against?
 
 
-## De-Serializing messages in DDSI<a name="deserializing" />
+## De-Serializing messages in DDSI (done)<a name="deserializing" />
 
 DDSI needs to be able to (de)serialize a few Security messages. In OpenSplice,
 some functionality of the database is used. This is unavailable in Cyclone.
@@ -117,10 +138,10 @@ expected to be major.
 
 - Authentication plugin (in progress)
 - Access Control plugin (todo)
-- Cryptography plugin (todo)
+- Cryptography plugin (in progress)
 
 
-## Port DDSI DDS Security<a name="port-ddsi" />
+## Port DDSI DDS Security (in progress)<a name="port-ddsi" />
 
 There is already quite a bit of difference between the DDSI codebases in
 OpenSplice and Cyclone. So, the copy/merge of the DDSI Security code from
@@ -155,9 +176,9 @@ different pull requests. Examples are
 - Extend configuration XML parsing with the security configuration (in progress).
 - Extend nn_qos with security related policies. Fill them with values from the
   configuration when applicable (in progress).
-- Add DDS Security endpoints that are non-volatile.
+- Add DDS Security endpoints that are non-volatile (in progress).
 - Add DDS Security endpoint that is volatile. This change has more impact than
-  all the non-volatile endpoints combined.
+  all the non-volatile endpoints combined (in progress).
 - Handshake.
 - Payload (en)(de)coding.
 - Submsg (en)(de)coding.
@@ -166,7 +187,7 @@ different pull requests. Examples are
 
 
 
-## Move configuration<a name="Move-configuration" />
+## Move configuration (in progress)<a name="Move-configuration" />
 
 After the port, the DDS Security configuration is still (partly) done through
 the overall configuration XML file (rest is coming from the permissions and
