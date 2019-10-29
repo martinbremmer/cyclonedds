@@ -987,7 +987,7 @@ static int handle_AckNack (struct receiver_state *rst, nn_etime_t tnow, const Ac
      tell the peer to acknowledge quickly. Not sure if that helps, but
      it might ... [NB writer->seq is the last msg sent so far] */
   max_seq_available = (prd->filter ? rn->lst_seq : seq_xmit);
-  if (msgs_sent && max_seq_in_reply < seq_xmit)
+  if (msgs_sent && max_seq_in_reply < max_seq_available)
   {
     RSTTRACE (" rexmit#%"PRIu32" maxseq:%"PRId64"<%"PRId64"<=%"PRId64"", msgs_sent, max_seq_in_reply, seq_xmit, wr->seq);
     force_heartbeat_to_peer (wr, &whcst, prd, 1);
