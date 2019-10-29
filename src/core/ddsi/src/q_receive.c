@@ -78,6 +78,11 @@ static void deliver_user_data_synchronously (struct nn_rsample_chain *sc, const 
 
 static void maybe_set_reader_in_sync (struct proxy_writer *pwr, struct pwr_rd_match *wn, seqno_t last_deliv_seq)
 {
+  if (pwr->uses_filter)
+  {
+    wn->in_sync = PRMSS_OUT_OF_SYNC;
+    return;
+  }
   switch (wn->in_sync)
   {
     case PRMSS_SYNC:
@@ -513,7 +518,7 @@ static int valid_DataFrag (const struct receiver_state *rst, struct nn_rmsg *rms
   return 1;
 }
 
-static int add_Gap (struct nn_xmsg *msg, struct writer *wr, struct proxy_reader *prd, seqno_t start, seqno_t base, uint32_t numbits, const uint32_t *bits)
+int add_Gap (struct nn_xmsg *msg, struct writer *wr, struct proxy_reader *prd, seqno_t start, seqno_t base, uint32_t numbits, const uint32_t *bits)
 {
   struct nn_xmsg_marker sm_marker;
   Gap_t *gap;
@@ -618,6 +623,7 @@ static int handle_AckNack (struct receiver_state *rst, nn_etime_t tnow, const Ac
   ddsi_guid_t src, dst;
   seqno_t seqbase;
   seqno_t seq_xmit;
+  seqno_t max_seq_available;
   nn_count_t *countp;
   seqno_t gapstart = -1, gapend = -1;
   unsigned gapnumbits = 0;
@@ -854,7 +860,7 @@ static int handle_AckNack (struct receiver_state *rst, nn_etime_t tnow, const Ac
         if (!wr->retransmitting && sample.unacked)
           writer_set_retransmitting (wr);
 
-        if (rst->gv->config.retransmit_merging != REXMIT_MERGE_NEVER && rn->assumed_in_sync)
+        if (rst->gv->config.retransmit_merging != REXMIT_MERGE_NEVER && rn->assumed_in_sync && !prd->filter)
         {
           /* send retransmit to all receivers, but skip if recently done */
           nn_mtime_t tstamp = now_mt ();
@@ -876,14 +882,40 @@ static int handle_AckNack (struct receiver_state *rst, nn_etime_t tnow, const Ac
         }
         else
         {
-          /* no merging, send directed retransmit */
-          RSTTRACE (" RX%"PRId64"", seqbase + i);
-          enqueued = (enqueue_sample_wrlock_held (wr, seq, sample.plist, sample.serdata, prd, 0) >= 0);
-          if (enqueued)
+          /* Is this a volatile reader with a filter?
+           * If so, call the filter to see if we should re-arrange the sequence gap when needed. */
+          if (prd->filter && (prd->filter(wr, prd, sample.serdata) == 0))
           {
-            max_seq_in_reply = seqbase + i;
-            msgs_sent++;
-            sample.rexmit_count++;
+            if (gapstart == -1)
+            {
+              RSTTRACE (" M%"PRId64, seqbase + i);
+              gapstart = seqbase + i;
+              gapend = gapstart + 1;
+            }
+            else if (seqbase + i == gapend)
+            {
+              RSTTRACE (" M%"PRId64, seqbase + i);
+              gapend = seqbase + i + 1;
+            }
+            else if (seqbase + i - gapend < 256)
+            {
+              unsigned idx = (unsigned) (seqbase + i - gapend);
+              RSTTRACE (" M%"PRId64, seqbase + i);
+              gapnumbits = idx + 1;
+              nn_bitset_set (gapnumbits, gapbits, idx);
+            }
+          }
+          else
+          {
+            /* no merging, send directed retransmit */
+            RSTTRACE (" RX%"PRId64"", seqbase + i);
+            enqueued = (enqueue_sample_wrlock_held (wr, seq, sample.plist, sample.serdata, prd, 0) >= 0);
+            if (enqueued)
+            {
+              max_seq_in_reply = seqbase + i;
+              msgs_sent++;
+              sample.rexmit_count++;
+            }
           }
         }
 
@@ -954,6 +986,7 @@ static int handle_AckNack (struct receiver_state *rst, nn_etime_t tnow, const Ac
      less than the last sequence number transmitted by the writer,
      tell the peer to acknowledge quickly. Not sure if that helps, but
      it might ... [NB writer->seq is the last msg sent so far] */
+  max_seq_available = (prd->filter ? rn->lst_seq : seq_xmit);
   if (msgs_sent && max_seq_in_reply < seq_xmit)
   {
     RSTTRACE (" rexmit#%"PRIu32" maxseq:%"PRId64"<%"PRId64"<=%"PRId64"", msgs_sent, max_seq_in_reply, seq_xmit, wr->seq);
@@ -965,7 +998,7 @@ static int handle_AckNack (struct receiver_state *rst, nn_etime_t tnow, const Ac
        gradually lowering rate.  If we just got a request for a
        retransmit, and there is more to be retransmitted, surely the
        rate should be kept up for now */
-    writer_hbcontrol_note_asyncwrite (wr, now_mt ());
+    writer_hbcontrol_note_asyncwrite (wr, rn, now_mt ());
   }
   /* If "final" flag not set, we must respond with a heartbeat. Do it
      now if we haven't done so already */
@@ -1040,7 +1073,7 @@ static void handle_Heartbeat_helper (struct pwr_rd_match * const wn, struct hand
   struct receiver_state * const rst = arg->rst;
   Heartbeat_t const * const msg = arg->msg;
   struct proxy_writer * const pwr = arg->pwr;
-  seqno_t refseq;
+  seqno_t refseq, last_seq;
 
   ASSERT_MUTEX_HELD (&pwr->e.lock);
 
@@ -1054,7 +1087,7 @@ static void handle_Heartbeat_helper (struct pwr_rd_match * const wn, struct hand
   /* Reference sequence number for determining whether or not to
      Ack/Nack unfortunately depends on whether the reader is in
      sync. */
-  if (wn->in_sync != PRMSS_OUT_OF_SYNC)
+  if (wn->in_sync != PRMSS_OUT_OF_SYNC && !pwr->uses_filter)
     refseq = nn_reorder_next_seq (pwr->reorder) - 1;
   else
     refseq = nn_reorder_next_seq (wn->u.not_in_sync.reorder) - 1;
@@ -1071,7 +1104,11 @@ static void handle_Heartbeat_helper (struct pwr_rd_match * const wn, struct hand
   {
     nn_mtime_t tsched;
     tsched.v = T_NEVER;
-    if (pwr->last_seq > refseq)
+    if (pwr->uses_filter)
+      last_seq = wn->last_seq;
+    else
+      last_seq = pwr->last_seq;
+    if (last_seq > refseq)
     {
       RSTTRACE ("/NAK");
       if (arg->tnow_mt.v >= wn->t_last_nack.v + rst->gv->config.nack_delay || refseq >= wn->seq_last_nack)
@@ -1190,44 +1227,66 @@ static int handle_Heartbeat (struct receiver_state *rst, nn_etime_t tnow, struct
     int refc_adjust = 0;
     nn_reorder_result_t res;
     gap = nn_rdata_newgap (rmsg);
-    if ((res = nn_reorder_gap (&sc, pwr->reorder, gap, 1, firstseq, &refc_adjust)) > 0)
+
+    if (!pwr->uses_filter)
     {
-      if (pwr->deliver_synchronously)
-        deliver_user_data_synchronously (&sc, NULL);
-      else
-        nn_dqueue_enqueue (pwr->dqueue, &sc, res);
-    }
-    for (wn = ddsrt_avl_find_min (&pwr_readers_treedef, &pwr->readers); wn; wn = ddsrt_avl_find_succ (&pwr_readers_treedef, &pwr->readers, wn))
-      if (wn->in_sync != PRMSS_SYNC)
+      if ((res = nn_reorder_gap (&sc, pwr->reorder, gap, 1, firstseq, &refc_adjust)) > 0)
       {
-        seqno_t last_deliv_seq = 0;
-        switch (wn->in_sync)
+        if (pwr->deliver_synchronously)
+          deliver_user_data_synchronously (&sc, NULL);
+        else
+          nn_dqueue_enqueue (pwr->dqueue, &sc, res);
+      }
+      for (wn = ddsrt_avl_find_min (&pwr_readers_treedef, &pwr->readers); wn; wn = ddsrt_avl_find_succ (&pwr_readers_treedef, &pwr->readers, wn))
+      {
+        if (wn->in_sync != PRMSS_SYNC)
         {
-          case PRMSS_SYNC:
-            assert(0);
-            break;
-          case PRMSS_TLCATCHUP:
-            last_deliv_seq = nn_reorder_next_seq (pwr->reorder) - 1;
-            break;
-          case PRMSS_OUT_OF_SYNC: {
-            struct nn_reorder *ro = wn->u.not_in_sync.reorder;
-            if ((res = nn_reorder_gap (&sc, ro, gap, 1, firstseq, &refc_adjust)) > 0)
-            {
-              if (pwr->deliver_synchronously)
-                deliver_user_data_synchronously (&sc, &wn->rd_guid);
-              else
-                nn_dqueue_enqueue1 (pwr->dqueue, &wn->rd_guid, &sc, res);
+          seqno_t last_deliv_seq = 0;
+          switch (wn->in_sync)
+          {
+            case PRMSS_SYNC:
+              assert(0);
+              break;
+            case PRMSS_TLCATCHUP:
+              last_deliv_seq = nn_reorder_next_seq (pwr->reorder) - 1;
+              break;
+            case PRMSS_OUT_OF_SYNC: {
+              struct nn_reorder *ro = wn->u.not_in_sync.reorder;
+              if ((res = nn_reorder_gap (&sc, ro, gap, 1, firstseq, &refc_adjust)) > 0)
+              {
+                if (pwr->deliver_synchronously)
+                  deliver_user_data_synchronously (&sc, &wn->rd_guid);
+                else
+                  nn_dqueue_enqueue1 (pwr->dqueue, &wn->rd_guid, &sc, res);
+              }
+              last_deliv_seq = nn_reorder_next_seq (wn->u.not_in_sync.reorder) - 1;
             }
-            last_deliv_seq = nn_reorder_next_seq (wn->u.not_in_sync.reorder) - 1;
+          }
+          if (wn->u.not_in_sync.end_of_tl_seq == MAX_SEQ_NUMBER)
+          {
+            wn->u.not_in_sync.end_of_tl_seq = fromSN (msg->lastSN);
+            RSTTRACE (" end-of-tl-seq(rd "PGUIDFMT" #%"PRId64")", PGUID(wn->rd_guid), wn->u.not_in_sync.end_of_tl_seq);
+          }
+          maybe_set_reader_in_sync (pwr, wn, last_deliv_seq);
+        }
+      }
+    }
+    else
+    {
+      for (wn = ddsrt_avl_find_min (&pwr_readers_treedef, &pwr->readers); wn; wn = ddsrt_avl_find_succ (&pwr_readers_treedef, &pwr->readers, wn))
+      {
+        if (guid_eq(&wn->rd_guid, &dst))
+        {
+          struct nn_reorder *ro = wn->u.not_in_sync.reorder;
+          if ((res = nn_reorder_gap (&sc, ro, gap, 1, firstseq, &refc_adjust)) > 0)
+            nn_dqueue_enqueue1 (pwr->dqueue, &wn->rd_guid, &sc, res);
+          if (fromSN (msg->lastSN) > wn->last_seq)
+          {
+            wn->last_seq = fromSN (msg->lastSN);
           }
         }
-        if (wn->u.not_in_sync.end_of_tl_seq == MAX_SEQ_NUMBER)
-        {
-          wn->u.not_in_sync.end_of_tl_seq = fromSN (msg->lastSN);
-          RSTTRACE (" end-of-tl-seq(rd "PGUIDFMT" #%"PRId64")", PGUID(wn->rd_guid), wn->u.not_in_sync.end_of_tl_seq);
-        }
-        maybe_set_reader_in_sync (pwr, wn, last_deliv_seq);
       }
+    }
     nn_fragchain_adjust_refcount (gap, refc_adjust);
   }
 
@@ -1468,7 +1527,7 @@ static int handle_NackFrag (struct receiver_state *rst, nn_etime_t tnow, const N
     struct whc_state whcst;
     whc_get_state(wr->whc, &whcst);
     force_heartbeat_to_peer (wr, &whcst, prd, 1);
-    writer_hbcontrol_note_asyncwrite (wr, now_mt ());
+    writer_hbcontrol_note_asyncwrite (wr, rn, now_mt ());
   }
 
  out:
@@ -1535,7 +1594,8 @@ static int handle_one_gap (struct proxy_writer *pwr, struct pwr_rd_match *wn, se
 
   /* Clean up the defrag admin: no fragments of a missing sample will
      be arriving in the future */
-  nn_defrag_notegap (pwr->defrag, a, b);
+  if (!pwr->uses_filter)
+    nn_defrag_notegap (pwr->defrag, a, b);
 
   /* Primary reorder: the gap message may cause some samples to become
      deliverable. */
@@ -1709,6 +1769,13 @@ static int handle_Gap (struct receiver_state *rst, nn_etime_t tnow, struct nn_rm
     pwr->last_seq = listbase + last_included_rel;
     pwr->last_fragnum = ~0u;
     pwr->last_fragnum_reset = 0;
+  }
+  if (pwr->uses_filter)
+  {
+    if (listbase + last_included_rel > wn->last_seq)
+    {
+      wn->last_seq = listbase + last_included_rel;
+    }
   }
   RSTTRACE (")");
   ddsrt_mutex_unlock (&pwr->e.lock);
@@ -2170,105 +2237,128 @@ static void handle_regular (struct receiver_state *rst, nn_etime_t tnow, struct 
     int refc_adjust = 0;
     struct nn_rsample_chain sc;
     struct nn_rdata *fragchain = nn_rsample_fragchain (rsample);
-    nn_reorder_result_t rres;
+    nn_reorder_result_t rres, rres2;
+    struct pwr_rd_match *wn;
 
-    rres = nn_reorder_rsample (&sc, pwr->reorder, rsample, &refc_adjust, 0); // nn_dqueue_is_full (pwr->dqueue));
-
-    if (rres == NN_REORDER_ACCEPT && pwr->n_reliable_readers == 0)
+    if (!pwr->uses_filter)
     {
-      /* If no reliable readers but the reorder buffer accepted the
-         sample, it must be a reliable proxy writer with only
-         unreliable readers.  "Inserting" a Gap [1, sampleinfo->seq)
-         will force delivery of this sample, and not cause the gap to
-         be added to the reorder admin. */
-      int gap_refc_adjust = 0;
-      rres = nn_reorder_gap (&sc, pwr->reorder, rdata, 1, sampleinfo->seq, &gap_refc_adjust);
-      assert (rres > 0);
-      assert (gap_refc_adjust == 0);
-    }
+      rres = nn_reorder_rsample (&sc, pwr->reorder, rsample, &refc_adjust, 0); // nn_dqueue_is_full (pwr->dqueue));
 
-    if (rres > 0)
-    {
-      /* Enqueue or deliver with pwr->e.lock held: to ensure no other
-         receive thread's data gets interleaved -- arguably delivery
-         needn't be exactly in-order, which would allow us to do this
-         without pwr->e.lock held. */
-      if (pwr->deliver_synchronously)
+      if (rres == NN_REORDER_ACCEPT && pwr->n_reliable_readers == 0)
       {
-        /* FIXME: just in case the synchronous delivery runs into a delay caused
-           by the current mishandling of resource limits */
-        if (*deferred_wakeup)
-          dd_dqueue_enqueue_trigger (*deferred_wakeup);
-        deliver_user_data_synchronously (&sc, NULL);
+        /* If no reliable readers but the reorder buffer accepted the
+           sample, it must be a reliable proxy writer with only
+           unreliable readers.  "Inserting" a Gap [1, sampleinfo->seq)
+           will force delivery of this sample, and not cause the gap to
+           be added to the reorder admin. */
+        int gap_refc_adjust = 0;
+        rres = nn_reorder_gap (&sc, pwr->reorder, rdata, 1, sampleinfo->seq, &gap_refc_adjust);
+        assert (rres > 0);
+        assert (gap_refc_adjust == 0);
       }
-      else
+
+      if (rres > 0)
       {
-        if (nn_dqueue_enqueue_deferred_wakeup (pwr->dqueue, &sc, rres))
+        /* Enqueue or deliver with pwr->e.lock held: to ensure no other
+           receive thread's data gets interleaved -- arguably delivery
+           needn't be exactly in-order, which would allow us to do this
+           without pwr->e.lock held. */
+        if (pwr->deliver_synchronously)
         {
-          if (*deferred_wakeup && *deferred_wakeup != pwr->dqueue)
+          /* FIXME: just in case the synchronous delivery runs into a delay caused
+             by the current mishandling of resource limits */
+          if (*deferred_wakeup)
             dd_dqueue_enqueue_trigger (*deferred_wakeup);
-          *deferred_wakeup = pwr->dqueue;
+          deliver_user_data_synchronously (&sc, NULL);
+        }
+        else
+        {
+          if (nn_dqueue_enqueue_deferred_wakeup (pwr->dqueue, &sc, rres))
+          {
+            if (*deferred_wakeup && *deferred_wakeup != pwr->dqueue)
+              dd_dqueue_enqueue_trigger (*deferred_wakeup);
+            *deferred_wakeup = pwr->dqueue;
+          }
+        }
+      }
+
+      if (pwr->n_readers_out_of_sync > 0)
+      {
+        /* Those readers catching up with TL but in sync with the proxy
+           writer may have become in sync with the proxy writer and the
+           writer; those catching up with TL all by themselves go through
+           the "TOO_OLD" path below. */
+        ddsrt_avl_iter_t it;
+        struct nn_rsample *rsample_dup = NULL;
+        int reuse_rsample_dup = 0;
+        for (wn = ddsrt_avl_iter_first (&pwr_readers_treedef, &pwr->readers, &it); wn != NULL; wn = ddsrt_avl_iter_next (&it))
+        {
+          if (wn->in_sync == PRMSS_SYNC)
+            continue;
+          /* only need to get a copy of the first sample, because that's the one
+             that triggered delivery */
+          if (!reuse_rsample_dup)
+            rsample_dup = nn_reorder_rsample_dup_first (rmsg, rsample);
+          rres2 = nn_reorder_rsample (&sc, wn->u.not_in_sync.reorder, rsample_dup, &refc_adjust, nn_dqueue_is_full (pwr->dqueue));
+          switch (rres2)
+          {
+            case NN_REORDER_TOO_OLD:
+            case NN_REORDER_REJECT:
+              reuse_rsample_dup = 1;
+              break;
+            case NN_REORDER_ACCEPT:
+              reuse_rsample_dup = 0;
+              break;
+            default:
+              assert (rres2 > 0);
+              /* note: can't deliver to a reader, only to a group */
+              maybe_set_reader_in_sync (pwr, wn, sampleinfo->seq);
+              reuse_rsample_dup = 0;
+              /* No need to deliver old data to out-of-sync readers
+                 synchronously -- ordering guarantees don't change
+                 as fresh data will be delivered anyway and hence
+                 the old data will never be guaranteed to arrive
+                 in-order, and those few microseconds can't hurt in
+                 catching up on transient-local data.  See also
+                 NN_REORDER_DELIVER case in outer switch. */
+              if (pwr->deliver_synchronously)
+              {
+                /* FIXME: just in case the synchronous delivery runs into a delay caused
+                   by the current mishandling of resource limits */
+                deliver_user_data_synchronously (&sc, &wn->rd_guid);
+              }
+              else
+              {
+                if (*deferred_wakeup && *deferred_wakeup != pwr->dqueue)
+                {
+                  dd_dqueue_enqueue_trigger (*deferred_wakeup);
+                  *deferred_wakeup = NULL;
+                }
+                nn_dqueue_enqueue1 (pwr->dqueue, &wn->rd_guid, &sc, rres2);
+              }
+              break;
+          }
         }
       }
     }
-
-    if (pwr->n_readers_out_of_sync > 0)
+    else
     {
-      /* Those readers catching up with TL but in sync with the proxy
-         writer may have become in sync with the proxy writer and the
-         writer; those catching up with TL all by themselves go through
-         the "TOO_OLD" path below. */
-      ddsrt_avl_iter_t it;
-      struct pwr_rd_match *wn;
-      struct nn_rsample *rsample_dup = NULL;
-      int reuse_rsample_dup = 0;
-      for (wn = ddsrt_avl_iter_first (&pwr_readers_treedef, &pwr->readers, &it); wn != NULL; wn = ddsrt_avl_iter_next (&it))
+      for (wn = ddsrt_avl_find_min (&pwr_readers_treedef, &pwr->readers); wn != NULL; wn = ddsrt_avl_find_succ (&pwr_readers_treedef, &pwr->readers, wn))
       {
-        nn_reorder_result_t rres2;
-        if (wn->in_sync == PRMSS_SYNC)
-          continue;
-        /* only need to get a copy of the first sample, because that's the one
-           that triggered delivery */
-        if (!reuse_rsample_dup)
-          rsample_dup = nn_reorder_rsample_dup_first (rmsg, rsample);
-        rres2 = nn_reorder_rsample (&sc, wn->u.not_in_sync.reorder, rsample_dup, &refc_adjust, nn_dqueue_is_full (pwr->dqueue));
-        switch (rres2)
+        if (guid_eq(&wn->rd_guid, &dst))
         {
-          case NN_REORDER_TOO_OLD:
-          case NN_REORDER_REJECT:
-            reuse_rsample_dup = 1;
-            break;
-          case NN_REORDER_ACCEPT:
-            reuse_rsample_dup = 0;
-            break;
-          default:
-            assert (rres2 > 0);
-            /* note: can't deliver to a reader, only to a group */
-            maybe_set_reader_in_sync (pwr, wn, sampleinfo->seq);
-            reuse_rsample_dup = 0;
-            /* No need to deliver old data to out-of-sync readers
-               synchronously -- ordering guarantees don't change
-               as fresh data will be delivered anyway and hence
-               the old data will never be guaranteed to arrive
-               in-order, and those few microseconds can't hurt in
-               catching up on transient-local data.  See also
-               NN_REORDER_DELIVER case in outer switch. */
-            if (pwr->deliver_synchronously)
-            {
-              /* FIXME: just in case the synchronous delivery runs into a delay caused
-                 by the current mishandling of resource limits */
-              deliver_user_data_synchronously (&sc, &wn->rd_guid);
-            }
+          rres2 = nn_reorder_rsample (&sc, wn->u.not_in_sync.reorder, rsample, &refc_adjust, nn_dqueue_is_full (pwr->dqueue));
+          if (sampleinfo->seq > wn->last_seq)
+          {
+            wn->last_seq = sampleinfo->seq;
+          }
+          if (rres2 > 0)
+          {
+            if (!pwr->deliver_synchronously)
+              nn_dqueue_enqueue (pwr->dqueue, &sc, rres2);
             else
-            {
-              if (*deferred_wakeup && *deferred_wakeup != pwr->dqueue)
-              {
-                dd_dqueue_enqueue_trigger (*deferred_wakeup);
-                *deferred_wakeup = NULL;
-              }
-              nn_dqueue_enqueue1 (pwr->dqueue, &wn->rd_guid, &sc, rres2);
-            }
-            break;
+              deliver_user_data_synchronously (&sc, &wn->rd_guid);
+          }
         }
       }
     }
