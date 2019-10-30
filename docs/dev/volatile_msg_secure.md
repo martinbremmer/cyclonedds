@@ -97,10 +97,20 @@ This is indicated by ```writer::xmit_hb_p2p``` and each writer/proxyreader match
 When a writer should send heartbeats, ```handle_xevk_heartbeat()``` is called. When ```xmit_hb_p2p``` is enabled, the control is immediately submitted to ```send_heartbeat_to_all_readers()```. This will add heartbeat submessages to an rtps message for every reader it deems necessary.
 
 
-### Reorder sequences
+### Reorder
 
-TODO: explain nn_reorder_set_next_seq() and related features.
+TODO: explain.
 
+Comment from the code:
+```cpp
+    /* for the builtin_volatile_secure proxy writer which uses a content filter set the next expected
+     * sequence number of the reorder administration to the maximum sequence number to ensure that effectively
+     * the reorder administration of the builtin_volatile_secure proxy writer is not used and because the corresponding
+     * reader is always considered out of sync the reorder administration of the corresponding reader will be used
+     * instead.
+     */
+```
+Why should the reader's reorder be used and not the proxy writer's?
 
 </br>
 </br>
@@ -161,7 +171,8 @@ nn_reorder_set_next_seq(): What does it do and who uses it?
 
 
 
-* Rebase to security branch when other security endpoints are merged.
+* Rebase to security branch, which now contains the other security endoints.
+* Maybe fix <https://github.com/eclipse-cyclonedds/cyclonedds/pull/296#issuecomment-547822817>?
 * Clean up code, especially when considering footprint when security support is not enabled.
 * Improve document.
 * Manual testing.
