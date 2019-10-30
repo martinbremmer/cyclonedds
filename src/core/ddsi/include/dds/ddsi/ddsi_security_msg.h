@@ -22,6 +22,9 @@ extern "C" {
 #endif
 
 struct participant;
+struct writer;
+struct proxy_reader;
+struct ddsi_serdata;
 
 #define GMCLASSID_SECURITY_AUTH_REQUEST       "dds.sec.auth_request"
 #define GMCLASSID_SECURITY_AUTH_HANDSHAKE     "dds.sec.auth"
@@ -94,6 +97,12 @@ write_crypto_exchange_message(
    const ddsi_guid_t *dst_eguid,
    const char *classid,
    const nn_dataholderseq_t *tokens);
+
+DDS_EXPORT int
+volatile_secure_data_filter(
+   struct writer *wr,
+   struct proxy_reader *prd,
+   struct ddsi_serdata *serdata);
 
 #if defined (__cplusplus)
 }

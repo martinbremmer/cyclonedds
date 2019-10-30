@@ -122,7 +122,7 @@ Trying to put the security participant volatile endpoint implementation into con
 What are these things used for?
 
 //wr_prd_match::lst_seq;
-wr_prd_match::hbcontrol;
+//wr_prd_match::hbcontrol;
 
 //pwr_rd_match::last_seq;
 
@@ -132,8 +132,7 @@ wr_prd_match::hbcontrol;
 
 //proxy_reader::filter
 
-writer_hbcontrol_note_asyncwrite(): What does it do and who uses it?
-writer_hbcontrol_p2p(): What does it do and who uses it?
+//writer_hbcontrol_p2p(): What does it do and who uses it?
 
 nn_defrag_prune(): What does it do and who uses it?
 nn_reorder_set_next_seq(): What does it do and who uses it?
@@ -152,9 +151,9 @@ nn_reorder_set_next_seq(): What does it do and who uses it?
 
 //handle_regular(): When using filter, do some reordering dqueue_enqueue and set pwr_rd_match::last_seq instead of the complicated stuff.
 
-send_heartbeat_to_all_readers(): What?
+//send_heartbeat_to_all_readers(): What?
 
-handle_xevk_heartbeat() -> send_heartbeat_to_all_readers() when writer::xmit_hb_p2p is true.
+//handle_xevk_heartbeat() -> send_heartbeat_to_all_readers() when writer::xmit_hb_p2p is true.
 
 //add_AckNack(): Basically, do out of order stuff when using filter (last_seq depends on pwr::last_seq or pwr_rd_match::last_seq).
 
@@ -166,7 +165,7 @@ handle_xevk_heartbeat() -> send_heartbeat_to_all_readers() when writer::xmit_hb_
 * Clean up code, especially when considering footprint when security support is not enabled.
 * Improve document.
 * Manual testing.
-* Review.
+* In depth review.
 
 
 

@@ -4591,38 +4591,6 @@ int delete_proxy_writer (struct q_globals *gv, const struct ddsi_guid *guid, nn_
 
 /* PROXY-READER ----------------------------------------------------- */
 
-static int volatile_secure_data_filter(struct writer *wr, struct proxy_reader *prd, struct ddsi_serdata *serdata)
-{
-  static const size_t guid_offset = offsetof(nn_participant_generic_message_t, destination_participant_guid);
-  ddsrt_iovec_t guid_ref = { .iov_len=0, .iov_base=NULL };
-  ddsi_guid_t zero_guid = { .prefix={ .u={ 0,0,0 } }, .entityid={ .u=0 }};
-  ddsi_guid_t *msg_guid;
-  ddsi_guid_t pp_guid;
-  int block;
-
-  DDSRT_UNUSED_ARG(wr);
-
-  assert(wr);
-  assert(prd);
-  assert(serdata);
-
-  (void)ddsi_serdata_to_ser_ref(serdata, guid_offset, sizeof(ddsi_guid_t), &guid_ref);
-  assert(guid_ref.iov_len == sizeof(ddsi_guid_t));
-  assert(guid_ref.iov_base);
-  msg_guid = (ddsi_guid_t*)guid_ref.iov_base;
-
-  block = !guid_eq(msg_guid, &zero_guid);
-  if (block)
-  {
-    pp_guid = nn_hton_guid(prd->c.proxypp->e.guid);
-    block = !guid_eq(msg_guid, &pp_guid);
-  }
-
-  ddsi_serdata_to_ser_unref(serdata, &guid_ref);
-
-  return !block;
-}
-
 int new_proxy_reader (struct q_globals *gv, const struct ddsi_guid *ppguid, const struct ddsi_guid *guid, struct addrset *as, const nn_plist_t *plist, nn_wctime_t timestamp, seqno_t seq
 #ifdef DDSI_INCLUDE_SSM
                       , int favours_ssm
@@ -4653,10 +4621,14 @@ int new_proxy_reader (struct q_globals *gv, const struct ddsi_guid *ppguid, cons
 
   ddsrt_avl_init (&prd_writers_treedef, &prd->writers);
 
+#ifdef DDSI_INCLUDE_SECURITY
   if (prd->e.guid.entityid.u == NN_ENTITYID_P2P_BUILTIN_PARTICIPANT_VOLATILE_SECURE_READER)
     prd->filter = volatile_secure_data_filter;
   else
     prd->filter = NULL;
+#else
+  prd->filter = NULL;
+#endif
 
   /* locking the entity prevents matching while the built-in topic hasn't been published yet */
   ddsrt_mutex_lock (&prd->e.lock);
