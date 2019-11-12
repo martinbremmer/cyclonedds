@@ -24,8 +24,10 @@ extern "C" {
 
 struct ddsi_serdata;
 struct addrset;
+struct writer;
 struct proxy_reader;
 struct proxy_writer;
+struct participant;
 
 struct nn_prismtech_participant_version_info;
 struct nn_xmsgpool;
@@ -54,10 +56,11 @@ void nn_xmsgpool_free (struct nn_xmsgpool *pool);
 /* To allocate a new xmsg from the pool; if expected_size is NOT
    exceeded, no reallocs will be performed, else the address of the
    xmsg may change because of reallocing when appending to it. */
-struct nn_xmsg *nn_xmsg_new (struct nn_xmsgpool *pool, const ddsi_guid_prefix_t *src_guid_prefix, size_t expected_size, enum nn_xmsg_kind kind);
+struct nn_xmsg *nn_xmsg_new (struct nn_xmsgpool *pool, const ddsi_guid_t *src_guid, struct participant *pp, size_t expected_size, enum nn_xmsg_kind kind);
 
 /* For sending to a particular destination (participant) */
 void nn_xmsg_setdst1 (struct nn_xmsg *m, const ddsi_guid_prefix_t *gp, const nn_locator_t *addr);
+bool nn_xmsg_getdst1prefix (struct nn_xmsg *m, ddsi_guid_prefix_t *gp);
 
 /* For sending to a particular proxy reader; this is a convenience
    routine that extracts a suitable address from the proxy reader's
@@ -109,12 +112,18 @@ size_t nn_xmsg_size (const struct nn_xmsg *m);
 void *nn_xmsg_payload (size_t *sz, struct nn_xmsg *m);
 void nn_xmsg_payload_to_plistsample (struct ddsi_plist_sample *dst, nn_parameterid_t keyparam, const struct nn_xmsg *m);
 enum nn_xmsg_kind nn_xmsg_kind (const struct nn_xmsg *m);
+void nn_xmsg_set_encoded (struct nn_xmsg *msg, bool encoded);
+bool nn_xmsg_get_encoded (const struct nn_xmsg *m);
 void nn_xmsg_guid_seq_fragid (const struct nn_xmsg *m, ddsi_guid_t *wrguid, seqno_t *wrseq, nn_fragment_number_t *wrfragid);
 
+size_t nn_xmsg_submsg_size (struct nn_xmsg *msg, struct nn_xmsg_marker marker);
 void *nn_xmsg_submsg_from_marker (struct nn_xmsg *msg, struct nn_xmsg_marker marker);
 void *nn_xmsg_append (struct nn_xmsg *m, struct nn_xmsg_marker *marker, size_t sz);
 void nn_xmsg_shrink (struct nn_xmsg *m, struct nn_xmsg_marker marker, size_t sz);
-void nn_xmsg_serdata (struct nn_xmsg *m, struct ddsi_serdata *serdata, size_t off, size_t len);
+void nn_xmsg_serdata (struct nn_xmsg *m, struct ddsi_serdata *serdata, size_t off, size_t len, struct writer *wr);
+void nn_xmsg_submsg_remove (struct nn_xmsg *msg, struct nn_xmsg_marker sm_marker);
+void nn_xmsg_submsg_replace (struct nn_xmsg *msg, struct nn_xmsg_marker sm_marker, unsigned char *new_submsg, size_t new_len);
+void nn_xmsg_submsg_append_refd_payload (struct nn_xmsg *msg, struct nn_xmsg_marker sm_marker);
 void nn_xmsg_submsg_setnext (struct nn_xmsg *msg, struct nn_xmsg_marker marker);
 void nn_xmsg_submsg_init (struct nn_xmsg *msg, struct nn_xmsg_marker marker, SubmessageKind_t smkind);
 void nn_xmsg_add_timestamp (struct nn_xmsg *m, nn_wctime_t t);

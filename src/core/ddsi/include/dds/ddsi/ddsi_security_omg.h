@@ -15,12 +15,23 @@
 #include "dds/ddsi/q_entity.h"
 #include "dds/ddsi/q_plist.h"
 #include "dds/ddsi/q_globals.h"
+#include "dds/ddsi/q_xmsg.h"
 
 #if defined (__cplusplus)
 extern "C" {
 #endif
 
 #ifdef DDSI_INCLUDE_SECURITY
+
+typedef struct nn_msg_sec_info {
+  uint32_t encoded:1;
+  uint32_t use_rtps_encoding:1;
+  int64_t src_pp_handle;
+  int64_t dst_pp_handle;
+} nn_msg_sec_info_t;
+
+
+bool q_omg_security_enabled(void);
 
 /**
  * @brief Check if security is enabled for the participant.
@@ -32,6 +43,12 @@ extern "C" {
  * @retval false  Participant is not secure
  */
 bool q_omg_participant_is_secure(const struct participant *pp);
+
+/* TODO: Add header. */
+bool q_omg_proxyparticipant_is_authenticated(const struct proxy_participant *proxy_pp);
+
+/* TODO: Add header. */
+int64_t q_omg_security_get_local_participant_handle(struct participant *pp);
 
 /**
  * @brief Get security info flags of the given writer.
@@ -107,11 +124,117 @@ unsigned determine_publication_writer(const struct writer *wr);
  * @retval true   The proxy participant may be deleted.
  * @retval false  The proxy participant may not be deleted by this writer.
  */
-bool allow_proxy_participant_deletion(struct q_globals * const gv, const struct ddsi_guid *guid, const ddsi_entityid_t pwr_entityid);
+bool
+allow_proxy_participant_deletion(
+  struct q_globals * const gv,
+  const struct ddsi_guid *guid,
+  const ddsi_entityid_t pwr_entityid);
+
+/* TODO: Add header. */
+bool
+q_omg_security_is_remote_rtps_protected(
+  struct proxy_participant *proxy_pp,
+  ddsi_entityid_t entityid);
+
+/* TODO: Add header. */
+bool
+q_omg_security_is_local_rtps_protected(
+  struct participant *pp,
+  ddsi_entityid_t entityid);
+
+/* TODO: Add header. */
+void
+q_omg_get_proxy_participant_security_info(
+  struct proxy_participant *prd,
+  const nn_plist_t *plist,
+  nn_security_info_t *info);
+
+/* TODO: Add header. */
+void
+q_omg_get_proxy_reader_security_info(
+  struct proxy_reader *prd,
+  const nn_plist_t *plist,
+  nn_security_info_t *info);
+
+/* TODO: Add header. */
+void
+q_omg_get_proxy_writer_security_info(
+  struct proxy_writer *pwr,
+  const nn_plist_t *plist,
+  nn_security_info_t *info);
+
+/* TODO: Add header. */
+bool
+q_omg_security_decode_serialized_payload(
+  struct proxy_writer *pwr,
+  const unsigned char *src_buf,
+  const unsigned int   src_len,
+  unsigned char     **dst_buf,
+  unsigned int       *dst_len);
+
+/* TODO: Add header. */
+bool
+q_omg_security_decode_submessage(
+  const ddsi_guid_prefix_t* const src_prefix,
+  const ddsi_guid_prefix_t* const dst_prefix,
+  const unsigned char   *src_buf,
+  const unsigned int     src_len,
+  unsigned char        **dst_buf,
+  unsigned int          *dst_len);
+
+/* TODO: Add header. */
+bool
+q_omg_security_encode_rtps_message(
+  int64_t                 src_handle,
+  ddsi_guid_t            *src_guid,
+  const unsigned char    *src_buf,
+  const unsigned int      src_len,
+  unsigned char        **dst_buf,
+  unsigned int          *dst_len,
+  int64_t                dst_handle);
+
+/* TODO: Add header. */
+bool
+q_omg_security_decode_rtps_message(
+  struct proxy_participant *proxypp,
+  const unsigned char      *src_buf,
+  const unsigned int        src_len,
+  unsigned char          **dst_buf,
+  unsigned int            *dst_len);
+
+/* This will replace the vec content with encoded data when necessary.
+ *
+ * encoding(    not needed) -> return( true), vec(untouched), buf(NULL)
+ * encoding(needed&success) -> return( true), vec( buf(new))
+ * encoding(needed&failure) -> return(false), vec(untouched), buf(NULL)
+ */
+bool
+encode_payload(
+  struct writer *wr,
+  ddsrt_iovec_t *vec,
+  unsigned char **buf);
+
+/* TODO: Add header. */
+void
+encode_datareader_submsg(
+  struct nn_xmsg *msg,
+  struct nn_xmsg_marker sm_marker,
+  struct proxy_writer *pwr,
+  const struct ddsi_guid *rd_guid);
+
+/* TODO: Add header. */
+void
+encode_datawriter_submsg(
+  struct nn_xmsg *msg,
+  struct nn_xmsg_marker sm_marker,
+  struct writer *wr);
+
 
 #else /* DDSI_INCLUDE_SECURITY */
 
 #include "dds/ddsi/q_unused.h"
+
+typedef char nn_msg_sec_info_t;
 
 inline bool
 q_omg_participant_is_secure(

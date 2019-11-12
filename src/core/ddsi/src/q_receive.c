@@ -103,6 +103,37 @@ static void maybe_set_reader_in_sync (struct proxy_writer *pwr, struct pwr_rd_ma
   }
 }
 
+static int validate_msg_decoding(ddsi_entityid_t entityid, struct proxy_participant *proxypp, nn_security_info_t *security_info, struct receiver_state *rst, SubmessageKind_t prev_smid)
+{
+  assert(proxypp);
+  assert(security_info);
+  assert(rst);
+
+  /* If this endpoint is expected to have submessages protected, it means that the
+   * previous submessage id (prev_smid) has to be SMID_SEC_PREFIX. That caused the
+   * protected submessage to be copied into the current RTPS message as a clear
+   * submessage, which we are currently handling.
+   * However, we have to check if the prev_smid is actually SMID_SEC_PREFIX, otherwise
+   * a rascal can inject data as just a clear submessage. */
+  if ((security_info->security_attributes & NN_ENDPOINT_SECURITY_ATTRIBUTES_FLAG_IS_SUBMESSAGE_PROTECTED)
+                                         == NN_ENDPOINT_SECURITY_ATTRIBUTES_FLAG_IS_SUBMESSAGE_PROTECTED)
+  {
+    if (prev_smid != SMID_SEC_PREFIX)
+    {
+      return 0;
+    }
+  }
+
+  /* At this point, we should also check if the complete RTPS message was encoded when
+   * that is expected. */
+  if (q_omg_security_is_remote_rtps_protected(proxypp, entityid) && !rst->rtps_encoded)
+  {
+    return 0;
+  }
+
+  return 1;
+}
+
 static int valid_sequence_number_set (const nn_sequence_number_set_header_t *snset)
 {
   return (fromSN (snset->bitmap_base) > 0 && snset->numbits <= 256);
@@ -278,7 +309,34 @@ static void set_sampleinfo_proxy_writer (struct nn_rsample_info *sampleinfo, dds
   sampleinfo->pwr = pwr;
 }
 
-static int valid_Data (const struct receiver_state *rst, struct nn_rmsg *rmsg, Data_t *msg, size_t size, int byteswap, struct nn_rsample_info *sampleinfo, unsigned char **payloadp)
+static int set_sampleinfo_bswap (struct nn_rsample_info *sampleinfo, struct CDRHeader *hdr)
+{
+  if (hdr)
+  {
+    switch (hdr->identifier)
+    {
+      case CDR_BE:
+      case PL_CDR_BE:
+      {
+        sampleinfo->bswap = (DDSRT_ENDIAN == DDSRT_LITTLE_ENDIAN) ? 1 : 0;
+        break;
+      }
+      case CDR_LE:
+      case PL_CDR_LE:
+      {
+        sampleinfo->bswap = (DDSRT_ENDIAN == DDSRT_LITTLE_ENDIAN) ? 0 : 1;
+        break;
+      }
+      default:
+      {
+        return 0;
+      }
+    }
+  }
+  return 1;
+}
+
+static int valid_Data (const struct receiver_state *rst, struct nn_rmsg *rmsg, Data_t *msg, size_t size, int byteswap, struct nn_rsample_info *sampleinfo, unsigned char **payloadp, uint32_t *payloadsz)
 {
   /* on success: sampleinfo->{seq,rst,statusinfo,pt_wr_info_zoff,bswap,complex_qos} all set */
   ddsi_guid_t pwr_guid;
@@ -354,6 +412,7 @@ static int valid_Data (const struct receiver_state *rst, struct nn_rmsg *rmsg, D
   {
     /*TRACE (("no payload\n"));*/
     *payloadp = NULL;
+    *payloadsz = 0;
     sampleinfo->size = 0;
   }
   else if ((size_t) ((char *) ptr + 4 - (char *) msg) > size)
@@ -363,35 +422,16 @@ static int valid_Data (const struct receiver_state *rst, struct nn_rmsg *rmsg, D
   }
   else
   {
-    struct CDRHeader *hdr;
     sampleinfo->size = (uint32_t) ((char *) msg + size - (char *) ptr);
+    *payloadsz = sampleinfo->size;
     *payloadp = ptr;
-    hdr = (struct CDRHeader *) ptr;
-    switch (hdr->identifier)
-    {
-      case CDR_BE:
-      case PL_CDR_BE:
-      {
-        sampleinfo->bswap = (DDSRT_ENDIAN == DDSRT_LITTLE_ENDIAN ? 1 : 0);
-        break;
-      }
-      case CDR_LE:
-      case PL_CDR_LE:
-      {
-        sampleinfo->bswap = (DDSRT_ENDIAN == DDSRT_LITTLE_ENDIAN ? 0 : 1);
-        break;
-      }
-      default:
-        return 0;
-    }
   }
   return 1;
 }
 
-static int valid_DataFrag (const struct receiver_state *rst, struct nn_rmsg *rmsg, DataFrag_t *msg, size_t size, int byteswap, struct nn_rsample_info *sampleinfo, unsigned char **payloadp)
+static int valid_DataFrag (const struct receiver_state *rst, struct nn_rmsg *rmsg, DataFrag_t *msg, size_t size, int byteswap, struct nn_rsample_info *sampleinfo, unsigned char **payloadp, uint32_t *payloadsz)
 {
   /* on success: sampleinfo->{rst,statusinfo,pt_wr_info_zoff,bswap,complex_qos} all set */
-  uint32_t payloadsz;
   ddsi_guid_t pwr_guid;
   unsigned char *ptr;
 
@@ -473,41 +513,23 @@ static int valid_DataFrag (const struct receiver_state *rst, struct nn_rmsg *rms
   }
 
   *payloadp = ptr;
-  payloadsz = (uint32_t) ((char *) msg + size - (char *) ptr);
-  if ((uint32_t) msg->fragmentsInSubmessage * msg->fragmentSize <= payloadsz)
+  *payloadsz = (uint32_t) ((char *) msg + size - (char *) ptr);
+  if ((uint32_t) msg->fragmentsInSubmessage * msg->fragmentSize <= (*payloadsz))
     ; /* all spec'd fragments fit in payload */
-  else if ((uint32_t) (msg->fragmentsInSubmessage - 1) * msg->fragmentSize >= payloadsz)
+  else if ((uint32_t) (msg->fragmentsInSubmessage - 1) * msg->fragmentSize >= (*payloadsz))
     return 0; /* I can live with a short final fragment, but _only_ the final one */
-  else if ((uint32_t) (msg->fragmentStartingNum - 1) * msg->fragmentSize + payloadsz >= msg->sampleSize)
+  else if ((uint32_t) (msg->fragmentStartingNum - 1) * msg->fragmentSize + (*payloadsz) >= msg->sampleSize)
     ; /* final fragment is long enough to cover rest of sample */
   else
     return 0;
   if (msg->fragmentStartingNum == 1)
   {
-    struct CDRHeader *hdr = (struct CDRHeader *) ptr;
     if ((size_t) ((char *) ptr + 4 - (char *) msg) > size)
     {
       /* no space for the header -- technically, allowing small
          fragments would also mean allowing a partial header, but I
          prefer this */
       return 0;
-    }
-    switch (hdr->identifier)
-    {
-      case CDR_BE:
-      case PL_CDR_BE:
-      {
-        sampleinfo->bswap = (DDSRT_ENDIAN == DDSRT_LITTLE_ENDIAN ? 1 : 0);
-        break;
-      }
-      case CDR_LE:
-      case PL_CDR_LE:
-      {
-        sampleinfo->bswap = (DDSRT_ENDIAN == DDSRT_LITTLE_ENDIAN ? 0 : 1);
-        break;
-      }
-      default:
-        return 0;
     }
   }
   return 1;
@@ -527,6 +549,7 @@ static int add_Gap (struct nn_xmsg *msg, struct writer *wr, struct proxy_reader 
   gap->gapList.numbits = numbits;
   memcpy (gap->bits, bits, NN_SEQUENCE_NUMBER_SET_BITS_SIZE (numbits));
   nn_xmsg_submsg_setnext (msg, sm_marker);
+  encode_datawriter_submsg(msg, sm_marker, wr);
   return 0;
 }
 
@@ -537,7 +560,7 @@ static void force_heartbeat_to_peer (struct writer *wr, const struct whc_state *
   ASSERT_MUTEX_HELD (&wr->e.lock);
   assert (wr->reliable);
 
-  m = nn_xmsg_new (wr->e.gv->xmsgpool, &wr->e.guid.prefix, 0, NN_XMSG_KIND_CONTROL);
+  m = nn_xmsg_new (wr->e.gv->xmsgpool, &wr->e.guid, wr->c.pp, 0, NN_XMSG_KIND_CONTROL);
   if (nn_xmsg_setdstPRD (m, prd) < 0)
   {
     /* If we don't have an address, give up immediately */
@@ -610,7 +633,7 @@ static int accept_ack_or_hb_w_timeout (nn_count_t new_count, nn_count_t *exp_cou
   return 1;
 }
 
-static int handle_AckNack (struct receiver_state *rst, nn_etime_t tnow, const AckNack_t *msg, nn_wctime_t timestamp)
+static int handle_AckNack (struct receiver_state *rst, nn_etime_t tnow, const AckNack_t *msg, nn_wctime_t timestamp, SubmessageKind_t prev_smid)
 {
   struct proxy_reader *prd;
   struct wr_prd_match *rn;
@@ -663,6 +686,12 @@ static int handle_AckNack (struct receiver_state *rst, nn_etime_t tnow, const Ac
   if ((prd = ephash_lookup_proxy_reader_guid (rst->gv->guid_hash, &src)) == NULL)
   {
     RSTTRACE (" "PGUIDFMT"? -> "PGUIDFMT")", PGUID (src), PGUID (dst));
+    return 1;
+  }
+
+  if (!validate_msg_decoding(src.entityid, prd->c.proxypp, &(prd->security_info), rst, prev_smid))
+  {
+    RSTTRACE (" "PGUIDFMT" -> "PGUIDFMT" clear submsg from protected src)", PGUID (src), PGUID (dst));
     return 1;
   }
 
@@ -934,7 +963,7 @@ static int handle_AckNack (struct receiver_state *rst, nn_etime_t tnow, const Ac
     RSTTRACE (" XGAP%"PRId64"..%"PRId64"/%u:", gapstart, gapend, gapnumbits);
     for (uint32_t i = 0; i < gapnumbits; i++)
       RSTTRACE ("%c", nn_bitset_isset (gapnumbits, gapbits, i) ? '1' : '0');
-    m = nn_xmsg_new (rst->gv->xmsgpool, &wr->e.guid.prefix, 0, NN_XMSG_KIND_CONTROL);
+    m = nn_xmsg_new (rst->gv->xmsgpool, &wr->e.guid, wr->c.pp, 0, NN_XMSG_KIND_CONTROL);
 #ifdef DDSI_INCLUDE_NETWORK_PARTITIONS
     nn_xmsg_setencoderid (m, wr->partition_id);
 #endif
@@ -1094,7 +1123,7 @@ static void handle_Heartbeat_helper (struct pwr_rd_match * const wn, struct hand
   }
 }
 
-static int handle_Heartbeat (struct receiver_state *rst, nn_etime_t tnow, struct nn_rmsg *rmsg, const Heartbeat_t *msg, nn_wctime_t timestamp)
+static int handle_Heartbeat (struct receiver_state *rst, nn_etime_t tnow, struct nn_rmsg *rmsg, const Heartbeat_t *msg, nn_wctime_t timestamp, SubmessageKind_t prev_smid)
 {
   /* We now cheat: and process the heartbeat for _all_ readers,
      always, regardless of the destination address in the Heartbeat
@@ -1129,6 +1158,12 @@ static int handle_Heartbeat (struct receiver_state *rst, nn_etime_t tnow, struct
   if ((pwr = ephash_lookup_proxy_writer_guid (rst->gv->guid_hash, &src)) == NULL)
   {
     RSTTRACE (PGUIDFMT"? -> "PGUIDFMT")", PGUID (src), PGUID (dst));
+    return 1;
+  }
+
+  if (!validate_msg_decoding(src.entityid, pwr->c.proxypp, &(pwr->security_info), rst, prev_smid))
+  {
+    RSTTRACE (" "PGUIDFMT" -> "PGUIDFMT" clear submsg from protected src)", PGUID (src), PGUID (dst));
     return 1;
   }
 
@@ -1244,7 +1279,7 @@ static int handle_Heartbeat (struct receiver_state *rst, nn_etime_t tnow, struct
   return 1;
 }
 
-static int handle_HeartbeatFrag (struct receiver_state *rst, UNUSED_ARG(nn_etime_t tnow), const HeartbeatFrag_t *msg)
+static int handle_HeartbeatFrag (struct receiver_state *rst, UNUSED_ARG(nn_etime_t tnow), const HeartbeatFrag_t *msg, SubmessageKind_t prev_smid)
 {
   const seqno_t seq = fromSN (msg->writerSN);
   const nn_fragment_number_t fragnum = msg->lastFragmentNum - 1; /* we do 0-based */
@@ -1266,6 +1301,12 @@ static int handle_HeartbeatFrag (struct receiver_state *rst, UNUSED_ARG(nn_etime
   if ((pwr = ephash_lookup_proxy_writer_guid (rst->gv->guid_hash, &src)) == NULL)
   {
     RSTTRACE (" "PGUIDFMT"? -> "PGUIDFMT")", PGUID (src), PGUID (dst));
+    return 1;
+  }
+
+  if (!validate_msg_decoding(src.entityid, pwr->c.proxypp, &(pwr->security_info), rst, prev_smid))
+  {
+    RSTTRACE (" "PGUIDFMT" -> "PGUIDFMT" clear submsg from protected src)", PGUID (src), PGUID (dst));
     return 1;
   }
 
@@ -1355,7 +1396,7 @@ static int handle_HeartbeatFrag (struct receiver_state *rst, UNUSED_ARG(nn_etime
   return 1;
 }
 
-static int handle_NackFrag (struct receiver_state *rst, nn_etime_t tnow, const NackFrag_t *msg)
+static int handle_NackFrag (struct receiver_state *rst, nn_etime_t tnow, const NackFrag_t *msg, SubmessageKind_t prev_smid)
 {
   struct proxy_reader *prd;
   struct wr_prd_match *rn;
@@ -1393,6 +1434,12 @@ static int handle_NackFrag (struct receiver_state *rst, nn_etime_t tnow, const N
   if ((prd = ephash_lookup_proxy_reader_guid (rst->gv->guid_hash, &src)) == NULL)
   {
     RSTTRACE (" "PGUIDFMT"? -> "PGUIDFMT")", PGUID (src), PGUID (dst));
+    return 1;
+  }
+
+  if (!validate_msg_decoding(src.entityid, prd->c.proxypp, &(prd->security_info), rst, prev_smid))
+  {
+    RSTTRACE (" "PGUIDFMT" -> "PGUIDFMT" clear submsg from protected src)", PGUID (src), PGUID (dst));
     return 1;
   }
 
@@ -1446,7 +1493,7 @@ static int handle_NackFrag (struct receiver_state *rst, nn_etime_t tnow, const N
     static uint32_t zero = 0;
     struct nn_xmsg *m;
     RSTTRACE (" msg not available: scheduling Gap\n");
-    m = nn_xmsg_new (rst->gv->xmsgpool, &wr->e.guid.prefix, 0, NN_XMSG_KIND_CONTROL);
+    m = nn_xmsg_new (rst->gv->xmsgpool, &wr->e.guid, wr->c.pp, 0, NN_XMSG_KIND_CONTROL);
 #ifdef DDSI_INCLUDE_NETWORK_PARTITIONS
     nn_xmsg_setencoderid (m, wr->partition_id);
 #endif
@@ -1590,7 +1637,7 @@ static int handle_one_gap (struct proxy_writer *pwr, struct pwr_rd_match *wn, se
   return gap_was_valuable;
 }
 
-static int handle_Gap (struct receiver_state *rst, nn_etime_t tnow, struct nn_rmsg *rmsg, const Gap_t *msg)
+static int handle_Gap (struct receiver_state *rst, nn_etime_t tnow, struct nn_rmsg *rmsg, const Gap_t *msg, SubmessageKind_t prev_smid)
 {
   /* Option 1: Process the Gap for the proxy writer and all
      out-of-sync readers: what do I care which reader is being
@@ -1640,6 +1687,12 @@ static int handle_Gap (struct receiver_state *rst, nn_etime_t tnow, struct nn_rm
   if ((pwr = ephash_lookup_proxy_writer_guid (rst->gv->guid_hash, &src)) == NULL)
   {
     RSTTRACE (""PGUIDFMT"? -> "PGUIDFMT")", PGUID (src), PGUID (dst));
+    return 1;
+  }
+
+  if (!validate_msg_decoding(src.entityid, pwr->c.proxypp, &(pwr->security_info), rst, prev_smid))
+  {
+    RSTTRACE (" "PGUIDFMT" -> "PGUIDFMT" clear submsg from protected src)", PGUID (src), PGUID (dst));
     return 1;
   }
 
@@ -1849,6 +1902,66 @@ unsigned char normalize_data_datafrag_flags (const SubmessageHeader_t *smhdr)
       assert (0);
       return 0;
   }
+}
+
+static int
+validate_submsg(struct q_globals *gv, unsigned char smid, unsigned char *submsg, unsigned char * const end, int byteswap)
+{
+  int result = -1;
+  if ((submsg + RTPS_SUBMESSAGE_HEADER_SIZE) <= end)
+  {
+    SubmessageHeader_t *hdr = (SubmessageHeader_t*)submsg;
+    if ((smid == 0 /* don't care */) || (hdr->submessageId == smid))
+    {
+      unsigned short size = hdr->octetsToNextHeader;
+      if (byteswap)
+      {
+         size = ddsrt_bswap2u(size);
+      }
+      result = (int)size + (int)RTPS_SUBMESSAGE_HEADER_SIZE;
+      if ((submsg + result) > end)
+      {
+        result = -1;
+      }
+    }
+    else
+    {
+      GVWARNING("Unexpected submsg 0x%02x (0x%02x expected)", hdr->submessageId, smid);
+    }
+  }
+  else
+  {
+    GVWARNING("Submsg 0x%02x does not fit message", smid);
+  }
+  return result;
+}
+
+
+static int
+padding_submsg(struct q_globals *gv, unsigned char *start, unsigned char *end, int byteswap)
+{
+  SubmessageHeader_t *padding = (SubmessageHeader_t*)start;
+  size_t size = (size_t)(end - start);
+  int result = -1;
+
+  assert(start <= end);
+
+  if (size > sizeof(SubmessageHeader_t))
+  {
+    result = (int)size;
+    padding->submessageId = SMID_PAD;
+    padding->flags = (byteswap ? !(DDSRT_ENDIAN == DDSRT_LITTLE_ENDIAN) : (DDSRT_ENDIAN == DDSRT_LITTLE_ENDIAN));
+    padding->octetsToNextHeader = (unsigned short)(size - sizeof(SubmessageHeader_t));
+    if (byteswap)
+    {
+      padding->octetsToNextHeader = ddsrt_bswap2u(padding->octetsToNextHeader);
+    }
+  }
+  else
+  {
+    GVWARNING("Padding submessage doesn't fit");
+  }
+  return result;
 }
 
 static struct reader *proxy_writer_first_in_sync_reader (struct proxy_writer *pwr, ddsrt_avl_iter_t *it)
@@ -2346,7 +2459,7 @@ static void drop_oversize (struct receiver_state *rst, struct nn_rmsg *rmsg, con
   }
 }
 
-static int handle_Data (struct receiver_state *rst, nn_etime_t tnow, struct nn_rmsg *rmsg, const Data_t *msg, size_t size, struct nn_rsample_info *sampleinfo, unsigned char *datap, struct nn_dqueue **deferred_wakeup)
+static int handle_Data (struct receiver_state *rst, nn_etime_t tnow, struct nn_rmsg *rmsg, const Data_t *msg, size_t size, struct nn_rsample_info *sampleinfo, unsigned char *datap, struct nn_dqueue **deferred_wakeup, SubmessageKind_t prev_smid)
 {
   RSTTRACE ("DATA("PGUIDFMT" -> "PGUIDFMT" #%"PRId64,
             PGUIDPREFIX (rst->src_guid_prefix), msg->x.writerId.u,
@@ -2356,6 +2469,15 @@ static int handle_Data (struct receiver_state *rst, nn_etime_t tnow, struct nn_r
   {
     RSTTRACE (" not-for-me)");
     return 1;
+  }
+
+  if (sampleinfo->pwr)
+  {
+    if (!validate_msg_decoding(sampleinfo->pwr->e.guid.entityid, sampleinfo->pwr->c.proxypp, &(sampleinfo->pwr->security_info), rst, prev_smid))
+    {
+      RSTTRACE (" clear submsg from protected src "PGUIDFMT")", PGUID (sampleinfo->pwr->e.guid));
+      return 1;
+    }
   }
 
   if (sampleinfo->size > rst->gv->config.max_sample_size)
@@ -2391,7 +2513,7 @@ static int handle_Data (struct receiver_state *rst, nn_etime_t tnow, struct nn_r
   return 1;
 }
 
-static int handle_DataFrag (struct receiver_state *rst, nn_etime_t tnow, struct nn_rmsg *rmsg, const DataFrag_t *msg, size_t size, struct nn_rsample_info *sampleinfo, unsigned char *datap, struct nn_dqueue **deferred_wakeup)
+static int handle_DataFrag (struct receiver_state *rst, nn_etime_t tnow, struct nn_rmsg *rmsg, const DataFrag_t *msg, size_t size, struct nn_rsample_info *sampleinfo, unsigned char *datap, struct nn_dqueue **deferred_wakeup, SubmessageKind_t prev_smid)
 {
   RSTTRACE ("DATAFRAG("PGUIDFMT" -> "PGUIDFMT" #%"PRId64"/[%u..%u]",
             PGUIDPREFIX (rst->src_guid_prefix), msg->x.writerId.u,
@@ -2402,6 +2524,15 @@ static int handle_DataFrag (struct receiver_state *rst, nn_etime_t tnow, struct 
   {
     RSTTRACE (" not-for-me)");
     return 1;
+  }
+
+  if (sampleinfo->pwr)
+  {
+    if (!validate_msg_decoding(sampleinfo->pwr->e.guid.entityid, sampleinfo->pwr->c.proxypp, &(sampleinfo->pwr->security_info), rst, prev_smid))
+    {
+      RSTTRACE (" clear submsg from protected src "PGUIDFMT")", PGUID (sampleinfo->pwr->e.guid));
+      return 1;
+    }
   }
 
   if (sampleinfo->size > rst->gv->config.max_sample_size)
@@ -2462,6 +2593,175 @@ static int handle_DataFrag (struct receiver_state *rst, nn_etime_t tnow, struct 
   }
   RSTTRACE (")");
   return 1;
+}
+
+static int handle_SecPrefix(struct receiver_state *rst,
+                            unsigned char *submsg,
+                            size_t submsg_size,
+                            unsigned char * const msg_end,
+                            const ddsi_guid_prefix_t * const src_prefix,
+                            const ddsi_guid_prefix_t * const dst_prefix,
+                            int byteswap)
+
+{
+  int result = -1;
+  int totalsize = (int)submsg_size;
+  unsigned char *body_submsg;
+  unsigned char *prefix_submsg;
+  unsigned char *postfix_submsg;
+  SubmessageHeader_t *hdr = (SubmessageHeader_t*)submsg;
+  uint8_t flags = hdr->flags;
+
+  if (byteswap)
+  {
+    if ((DDSRT_ENDIAN == DDSRT_LITTLE_ENDIAN))
+      hdr->flags |= 0x01;
+    else
+      hdr->flags &= 0xFE;
+  }
+
+  /* First sub-message is the SEC_PREFIX. */
+  prefix_submsg = submsg;
+
+  /* Next sub-message is SEC_BODY when encrypted or the original submessage when only signed. */
+  body_submsg = submsg + submsg_size;
+  result = validate_submsg(rst->gv, 0 /* don't care smid */, body_submsg, msg_end, byteswap);
+  if (result > 0)
+  {
+    totalsize += result;
+
+    /* Third sub-message should be the SEC_POSTFIX. */
+    postfix_submsg = submsg + totalsize;
+    result = validate_submsg(rst->gv, SMID_SEC_POSTFIX, postfix_submsg, msg_end, byteswap);
+    if (result > 0)
+    {
+      bool decoded;
+      unsigned char *dst_buf;
+      unsigned int   dst_len;
+
+      totalsize += result;
+
+      /* Decode all three submessages. */
+      decoded = q_omg_security_decode_submessage(src_prefix, dst_prefix, submsg, (unsigned int)totalsize, &dst_buf, &dst_len);
+      if (decoded && dst_buf)
+      {
+        /*
+         * The 'normal' submessage sequence handling will continue after the
+         * given security SEC_PREFIX.
+         */
+        if (*body_submsg == SMID_SEC_BODY)
+        {
+          /*
+           * Copy the decoded buffer into the original message, replacing (part
+           * of) SEC_BODY.
+           *
+           * By replacing the SEC_BODY with the decoded submessage, everything
+           * can continue as if there was never an encoded submessage.
+           */
+          assert((int)dst_len <= ((int)totalsize - (int)submsg_size));
+          memcpy(body_submsg, dst_buf, dst_len);
+
+          /* Remainder of SEC_BODY & SEC_POSTFIX should be padded to keep the submsg sequence going. */
+          result = padding_submsg(rst->gv, body_submsg + dst_len, prefix_submsg + totalsize, byteswap);
+        }
+        else
+        {
+          /*
+           * When only signed, then the submessage is already available and
+           * SMID_SEC_POSTFIX will be ignored.
+           * So, we don't really have to do anything.
+           */
+        }
+        ddsrt_free(dst_buf);
+      }
+      else
+      {
+        /*
+         * Decoding or signing failed.
+         *
+         * Replace the security submessages with padding. This also removes a plain
+         * submessage when a signature check failed.
+         */
+        result = padding_submsg(rst->gv, body_submsg, prefix_submsg + totalsize, byteswap);
+      }
+    }
+  }
+  /* Restore flags. */
+  hdr->flags = flags;
+  return result;
+}
+
+static int decode_payload(const struct q_globals *gv, struct nn_rsample_info *sampleinfo, unsigned char *payloadp, uint32_t *payloadsz, size_t *submsg_len)
+{
+  int ok = 1;
+
+  assert(payloadp);
+  assert(payloadsz);
+  assert(*payloadsz);
+  assert(submsg_len);
+  assert(sampleinfo);
+
+  if (sampleinfo->pwr == NULL)
+  {
+    return 1;
+  }
+
+  if ((sampleinfo->pwr->security_info.security_attributes & NN_ENDPOINT_SECURITY_ATTRIBUTES_FLAG_IS_PAYLOAD_PROTECTED)
+                                                         == NN_ENDPOINT_SECURITY_ATTRIBUTES_FLAG_IS_PAYLOAD_PROTECTED)
+  {
+    unsigned char *dst_buf = NULL;
+    unsigned int   dst_len = 0;
+
+    /* Decrypt the payload. */
+    if (q_omg_security_decode_serialized_payload(sampleinfo->pwr, payloadp, *payloadsz, &dst_buf, &dst_len))
+    {
+      /* Expect result to always fit into the original buffer. */
+      assert(*payloadsz >= dst_len);
+
+      /* Reduce submessage and payload lengths. */
+      *submsg_len -= (*payloadsz - dst_len);
+      *payloadsz   = dst_len;
+
+      /* Replace the encrypted payload with the decrypted. */
+      memcpy(payloadp, dst_buf, dst_len);
+      ddsrt_free(dst_buf);
+    }
+    else
+    {
+      GVWARNING("decode_payload: failed to decrypt data from "PGUIDFMT"", PGUID (sampleinfo->pwr->e.guid));
+      ok = 0;
+    }
+  }
+
+  return ok;
+}
+
+static int decode_Data(const struct q_globals *gv, struct nn_rsample_info *sampleinfo, unsigned char *payloadp, uint32_t payloadsz, size_t *submsg_len)
+{
+  int ok = 1;
+  /* Only decode when there's actual data. */
+  if (payloadp && (payloadsz > 0))
+  {
+    ok = decode_payload(gv, sampleinfo, payloadp, &payloadsz, submsg_len);
+    if (ok)
+    {
+      /* It's possible that the payload size (and thus the sample size) has been reduced. */
+      sampleinfo->size = payloadsz;
+    }
+  }
+  return ok;
+}
+
+static int decode_DataFrag(const struct q_globals *gv, struct nn_rsample_info *sampleinfo, unsigned char *payloadp, uint32_t payloadsz, size_t *submsg_len)
+{
+  int ok = 1;
+  /* Only decode when there's actual data. */
+  if (payloadp && (payloadsz > 0))
+  {
+    ok = decode_payload(gv, sampleinfo, payloadp, &payloadsz, submsg_len);
+    /* Do not touch the sampleinfo->size in contradiction to decode_Data() (it has been calculated differently). */
+  }
+  return ok;
 }
 
 static void malformed_packet_received_nosubmsg (const struct q_globals *gv, const unsigned char * msg, ssize_t len, const char *state, nn_vendorid_t vendorid
@@ -2606,7 +2906,8 @@ static int handle_submsg_sequence
   unsigned char * const msg /* NOT const - we may byteswap it */,
   const size_t len,
   unsigned char * submsg /* aliases somewhere in msg */,
-  struct nn_rmsg * const rmsg
+  struct nn_rmsg * const rmsg,
+  bool rtps_encoded /* indicate if the message was rtps encoded */
 )
 {
   const char *state;
@@ -2618,6 +2919,7 @@ static int handle_submsg_sequence
   size_t submsg_size = 0;
   unsigned char * end = msg + len;
   struct nn_dqueue *deferred_wakeup = NULL;
+  SubmessageKind_t prev_smid = SMID_PAD;
 
   /* Receiver state is dynamically allocated with lifetime bound to
      the message.  Updates cause a new copy to be created if the
@@ -2639,6 +2941,7 @@ static int handle_submsg_sequence
      false at any time. That's ok: it's real purpose is to filter out
      discovery data accidentally sent by Cloud */
   rst->forme = 1;
+  rst->rtps_encoded = rtps_encoded;
   rst->vendor = hdr->vendorid;
   rst->protocol_version = hdr->version;
   rst->srcloc = *srcloc;
@@ -2700,14 +3003,14 @@ static int handle_submsg_sequence
         state = "parse:acknack";
         if (!valid_AckNack (rst, &sm->acknack, submsg_size, byteswap))
           goto malformed;
-        handle_AckNack (rst, tnowE, &sm->acknack, ts_for_latmeas ? timestamp : NN_WCTIME_INVALID);
+        handle_AckNack (rst, tnowE, &sm->acknack, ts_for_latmeas ? timestamp : NN_WCTIME_INVALID, prev_smid);
         ts_for_latmeas = 0;
         break;
       case SMID_HEARTBEAT:
         state = "parse:heartbeat";
         if (!valid_Heartbeat (&sm->heartbeat, submsg_size, byteswap))
           goto malformed;
-        handle_Heartbeat (rst, tnowE, rmsg, &sm->heartbeat, ts_for_latmeas ? timestamp : NN_WCTIME_INVALID);
+        handle_Heartbeat (rst, tnowE, rmsg, &sm->heartbeat, ts_for_latmeas ? timestamp : NN_WCTIME_INVALID, prev_smid);
         ts_for_latmeas = 0;
         break;
       case SMID_GAP:
@@ -2719,7 +3022,7 @@ static int handle_submsg_sequence
            rst after inserting the gap in the admin. */
         if (!valid_Gap (&sm->gap, submsg_size, byteswap))
           goto malformed;
-        handle_Gap (rst, tnowE, rmsg, &sm->gap);
+        handle_Gap (rst, tnowE, rmsg, &sm->gap, prev_smid);
         ts_for_latmeas = 0;
         break;
       case SMID_INFO_TS:
@@ -2763,27 +3066,38 @@ static int handle_submsg_sequence
         state = "parse:nackfrag";
         if (!valid_NackFrag (&sm->nackfrag, submsg_size, byteswap))
           goto malformed;
-        handle_NackFrag (rst, tnowE, &sm->nackfrag);
+        handle_NackFrag (rst, tnowE, &sm->nackfrag, prev_smid);
         ts_for_latmeas = 0;
         break;
       case SMID_HEARTBEAT_FRAG:
         state = "parse:heartbeatfrag";
         if (!valid_HeartbeatFrag (&sm->heartbeatfrag, submsg_size, byteswap))
           goto malformed;
-        handle_HeartbeatFrag (rst, tnowE, &sm->heartbeatfrag);
+        handle_HeartbeatFrag (rst, tnowE, &sm->heartbeatfrag, prev_smid);
         ts_for_latmeas = 0;
         break;
       case SMID_DATA_FRAG:
         state = "parse:datafrag";
         {
           struct nn_rsample_info sampleinfo;
+          uint32_t datasz = 0;
           unsigned char *datap;
+          size_t submsg_len = submsg_size;
           /* valid_DataFrag does not validate the payload */
-          if (!valid_DataFrag (rst, rmsg, &sm->datafrag, submsg_size, byteswap, &sampleinfo, &datap))
+          if (!valid_DataFrag (rst, rmsg, &sm->datafrag, submsg_size, byteswap, &sampleinfo, &datap, &datasz))
             goto malformed;
+          /* This only decodes the payload when needed (possibly reducing the submsg size). */
+          if (!decode_DataFrag (rst->gv, &sampleinfo, datap, datasz, &submsg_len))
+            goto malformed;
+          /* Set the sample bswap according to the payload info (only first fragment has proper header). */
+          if (sm->datafrag.fragmentStartingNum == 1) {
+            if (!set_sampleinfo_bswap(&sampleinfo, (struct CDRHeader *)datap))
+              goto malformed;
+          }
+
           sampleinfo.timestamp = timestamp;
           sampleinfo.reception_timestamp = tnowWC;
-          handle_DataFrag (rst, tnowE, rmsg, &sm->datafrag, submsg_size, &sampleinfo, datap, &deferred_wakeup);
+          handle_DataFrag (rst, tnowE, rmsg, &sm->datafrag, submsg_len, &sampleinfo, datap, &deferred_wakeup, prev_smid);
           rst_live = 1;
           ts_for_latmeas = 0;
         }
@@ -2793,12 +3107,20 @@ static int handle_submsg_sequence
         {
           struct nn_rsample_info sampleinfo;
           unsigned char *datap;
+          uint32_t datasz = 0;
+          size_t submsg_len = submsg_size;
           /* valid_Data does not validate the payload */
-          if (!valid_Data (rst, rmsg, &sm->data, submsg_size, byteswap, &sampleinfo, &datap))
+          if (!valid_Data (rst, rmsg, &sm->data, submsg_size, byteswap, &sampleinfo, &datap, &datasz))
+            goto malformed;
+          /* This only decodes the payload when needed (possibly reducing the submsg size). */
+          if (!decode_Data (rst->gv, &sampleinfo, datap, datasz, &submsg_len))
+            goto malformed;
+          /* Set the sample bswap according to the payload info. */
+          if (!set_sampleinfo_bswap(&sampleinfo, (struct CDRHeader *)datap))
             goto malformed;
           sampleinfo.timestamp = timestamp;
           sampleinfo.reception_timestamp = tnowWC;
-          handle_Data (rst, tnowE, rmsg, &sm->data, submsg_size, &sampleinfo, datap, &deferred_wakeup);
+          handle_Data (rst, tnowE, rmsg, &sm->data, submsg_len, &sampleinfo, datap, &deferred_wakeup, prev_smid);
           rst_live = 1;
           ts_for_latmeas = 0;
         }
@@ -2819,6 +3141,39 @@ static int handle_submsg_sequence
         GVTRACE ("ENTITY_ID");
         break;
       }
+      case SMID_SEC_PREFIX:
+        state = "parse:sec_prefix";
+        {
+          GVTRACE ("SEC_PREFIX");
+          if (handle_SecPrefix(rst, submsg, submsg_size, end, &rst->src_guid_prefix, &rst->dst_guid_prefix, byteswap) < 0)
+            goto malformed;
+        }
+        break;
+      case SMID_SEC_BODY:
+        {
+          /* Ignore: because it should have been handled by SMID_SEC_PREFIX. */
+          GVTRACE ("SEC_BODY");
+        }
+        break;
+      case SMID_SEC_POSTFIX:
+        {
+          /* Ignore: because it should have been handled by SMID_SEC_PREFIX. */
+          GVTRACE ("SEC_POSTFIX");
+        }
+        break;
+      case SMID_SRTPS_PREFIX:
+        {
+          /* TODO: Implement CHAM-519 "DDSI hooks to encode/decode RTPS messages. */
+          /* WAIT WHAT? Isn't it implemented? */
+          GVTRACE ("SRTPS_PREFIX");
+        }
+        break;
+      case SMID_SRTPS_POSTFIX:
+        {
+          /* TODO: Implement CHAM-519 "DDSI hooks to encode/decode RTPS messages. */
+          GVTRACE ("SRTPS_POSTFIX");
+        }
+        break;
       default:
         state = "parse:undefined";
         GVTRACE ("UNDEFINED(%x)", sm->smhdr.submessageId);
@@ -2849,6 +3204,7 @@ static int handle_submsg_sequence
         ts_for_latmeas = 0;
         break;
     }
+    prev_smid = state_smkind;
     submsg += submsg_size;
     GVTRACE ("\n");
   }
@@ -2874,6 +3230,115 @@ malformed_asleep:
   if (deferred_wakeup)
     dd_dqueue_enqueue_trigger (deferred_wakeup);
   return -1;
+}
+
+typedef enum {
+  NN_RTPS_MSG_STATE_ERROR,
+  NN_RTPS_MSG_STATE_PLAIN,
+  NN_RTPS_MSG_STATE_ENCODED
+} nn_rtps_msg_state_t;
+
+
+static nn_rtps_msg_state_t
+check_rtps_message_is_secure(
+    struct q_globals *gv,
+    Header_t *hdr,
+    unsigned char *buff,
+    bool isstream,
+    struct proxy_participant **proxypp)
+{
+  nn_rtps_msg_state_t ret = NN_RTPS_MSG_STATE_ERROR;
+
+  SubmessageHeader_t *submsg;
+  uint32_t offset = RTPS_MESSAGE_HEADER_SIZE + (isstream ? sizeof(MsgLen_t) : 0);
+
+  submsg = (SubmessageHeader_t *)(buff + offset);
+  if (submsg->submessageId == SMID_SRTPS_PREFIX)
+  {
+    ddsi_guid_t guid;
+
+    guid.prefix = hdr->guid_prefix;
+    guid.entityid.u = NN_ENTITYID_PARTICIPANT;
+
+    GVTRACE(" from "PGUIDFMT, PGUID(guid));
+
+    *proxypp = ephash_lookup_proxy_participant_guid(gv->guid_hash, &guid);
+    if (*proxypp)
+    {
+      if (q_omg_proxyparticipant_is_authenticated(*proxypp))
+      {
+        ret = NN_RTPS_MSG_STATE_ENCODED;
+      }
+      else
+      {
+        GVTRACE ("received encoded rtps message from unauthenticated participant");
+      }
+    }
+    else
+    {
+      GVTRACE ("received encoded rtps message from unknown participant");
+    }
+    GVTRACE("\n");
+  }
+  else
+  {
+    ret = NN_RTPS_MSG_STATE_PLAIN;
+  }
+
+  return ret;
+}
+
+static nn_rtps_msg_state_t decode_rtps_message(struct q_globals *gv, struct nn_rmsg **rmsg, Header_t **hdr, unsigned char **buff, ssize_t *sz, struct nn_rbufpool *rbpool, bool isstream)
+{
+  nn_rtps_msg_state_t ret = NN_RTPS_MSG_STATE_ERROR;
+  struct proxy_participant *proxypp = NULL;
+  unsigned char *dstbuf;
+  unsigned char *srcbuf;
+  uint32_t srclen, dstlen;
+  bool decoded;
+
+  /* Currently the decode_rtps_message returns a new allocated buffer.
+   * This could be optimized by providing a pre-allocated nn_rmsg buffer to
+   * copy the decoded rtps message in.
+   */
+
+  ret = check_rtps_message_is_secure(gv, *hdr, *buff, isstream, &proxypp);
+  if (ret == NN_RTPS_MSG_STATE_ENCODED)
+  {
+    if (isstream)
+    {
+      /* Remove MsgLen Submessage which was only needed for a stream to determine the end of the message */
+      srcbuf = *buff + sizeof(MsgLen_t);
+      srclen = (uint32_t)((size_t)(*sz) - sizeof(MsgLen_t));
+      memmove(srcbuf, *buff, RTPS_MESSAGE_HEADER_SIZE);
+    }
+    else
+    {
+      srcbuf = *buff;
+      srclen = (uint32_t)*sz;
+    }
+
+    decoded = q_omg_security_decode_rtps_message(proxypp, srcbuf, srclen, &dstbuf, &dstlen);
+    if (decoded)
+    {
+      nn_rmsg_commit (*rmsg);
+      *rmsg = nn_rmsg_new (rbpool);
+
+      *buff = (unsigned char *) NN_RMSG_PAYLOAD (*rmsg);
+
+      memcpy(*buff, dstbuf, dstlen);
+      nn_rmsg_setsize (*rmsg, dstlen);
+
+      ddsrt_free(dstbuf);
+
+      *hdr = (Header_t*) *buff;
+      (*hdr)->guid_prefix = nn_ntoh_guid_prefix ((*hdr)->guid_prefix);
+      *sz = (ssize_t)dstlen;
+    } else {
+      ret = NN_RTPS_MSG_STATE_ERROR;
+    }
+  }
+  return ret;
 }
 
 static bool do_packet (struct thread_state1 * const ts1, struct q_globals *gv, ddsi_tran_conn_t conn, const ddsi_guid_prefix_t *guidprefix, struct nn_rbufpool *rbpool)
@@ -2985,8 +3450,29 @@ static bool do_packet (struct thread_state1 * const ts1, struct q_globals *gv, d
         GVTRACE ("HDR(%"PRIx32":%"PRIx32":%"PRIx32" vendor %d.%d) len %lu from %s\n",
                  PGUIDPREFIX (hdr->guid_prefix), hdr->vendorid.id[0], hdr->vendorid.id[1], (unsigned long) sz, addrstr);
       }
+      nn_rtps_msg_state_t res = decode_rtps_message(gv, &rmsg, &hdr, &buff, &sz, rbpool, conn->m_stream);
 
-      handle_submsg_sequence (ts1, gv, conn, &srcloc, now (), now_et (), &hdr->guid_prefix, guidprefix, buff, (size_t) sz, buff + RTPS_MESSAGE_HEADER_SIZE, rmsg);
+      if (res != NN_RTPS_MSG_STATE_ERROR)
+      {
+        handle_submsg_sequence (ts1,
+                                gv,
+                                conn,
+                                &srcloc,
+                                now (),
+                                now_et (),
+                                &hdr->guid_prefix,
+                                guidprefix,
+                                buff,
+                                (size_t) sz,
+                                buff + RTPS_MESSAGE_HEADER_SIZE,
+                                rmsg,
+                                res == NN_RTPS_MSG_STATE_ENCODED);
+      }
+      else
+      {
+        /* drop message */
+        sz = 1;
+      }
     }
   }
   nn_rmsg_commit (rmsg);

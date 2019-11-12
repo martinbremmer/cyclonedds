@@ -16,12 +16,14 @@
 #include "dds/ddsrt/avl.h"
 #include "dds/ddsrt/sync.h"
 #include "dds/ddsi/q_rtps.h"
+#include "dds/ddsi/q_plist.h"
 #include "dds/ddsi/q_protocol.h"
 #include "dds/ddsi/q_lat_estim.h"
 #include "dds/ddsi/q_ephash.h"
 #include "dds/ddsi/q_hbcontrol.h"
 #include "dds/ddsi/q_feature_check.h"
 #include "dds/ddsi/q_inverse_uint32_set.h"
+#include "dds/ddsi/ddsi_security_omg.h"
 
 #include "dds/ddsi/ddsi_tran.h"
 
@@ -314,6 +316,7 @@ struct proxy_participant
   unsigned proxypp_have_spdp: 1;
   unsigned proxypp_have_cm: 1;
   unsigned owns_lease: 1;
+  nn_security_info_t security_info;
 };
 
 /* Representing proxy subscriber & publishers as "groups": until DDSI2
@@ -367,6 +370,7 @@ struct proxy_writer {
   struct local_reader_ary rdary; /* LOCAL readers for fast-pathing; if not fast-pathed, fall back to scanning local_readers */
   ddsi2direct_directread_cb_t ddsi2direct_cb;
   void *ddsi2direct_cbarg;
+  nn_security_info_t security_info;
 };
 
 struct proxy_reader {
@@ -378,6 +382,7 @@ struct proxy_reader {
   unsigned favours_ssm: 1; /* iff 1, this proxy reader favours SSM when available */
 #endif
   ddsrt_avl_tree_t writers; /* matching LOCAL writers */
+  nn_security_info_t security_info;
 };
 
 extern const ddsrt_avl_treedef_t wr_readers_treedef;

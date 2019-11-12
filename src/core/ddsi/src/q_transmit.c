@@ -140,7 +140,7 @@ struct nn_xmsg *writer_hbcontrol_create_heartbeat (struct writer *wr, const stru
   assert (wr->reliable);
   assert (hbansreq >= 0);
 
-  if ((msg = nn_xmsg_new (gv->xmsgpool, &wr->e.guid.prefix, sizeof (InfoTS_t) + sizeof (Heartbeat_t), NN_XMSG_KIND_CONTROL)) == NULL)
+  if ((msg = nn_xmsg_new (gv->xmsgpool, &wr->e.guid, wr->c.pp, sizeof (InfoTS_t) + sizeof (Heartbeat_t), NN_XMSG_KIND_CONTROL)) == NULL)
     /* out of memory at worst slows down traffic */
     return NULL;
 
@@ -379,6 +379,7 @@ void add_Heartbeat (struct nn_xmsg *msg, struct writer *wr, const struct whc_sta
   hb->count = ++wr->hbcount;
 
   nn_xmsg_submsg_setnext (msg, sm_marker);
+  encode_datawriter_submsg(msg, sm_marker, wr);
 }
 
 static dds_return_t create_fragment_message_simple (struct writer *wr, seqno_t seq, struct ddsi_serdata *serdata, struct nn_xmsg **pmsg)
@@ -411,7 +412,7 @@ static dds_return_t create_fragment_message_simple (struct writer *wr, seqno_t s
   ASSERT_MUTEX_HELD (&wr->e.lock);
 
   /* INFO_TS: 12 bytes, Data_t: 24 bytes, expected inline QoS: 32 => should be single chunk */
-  if ((*pmsg = nn_xmsg_new (gv->xmsgpool, &wr->e.guid.prefix, sizeof (InfoTimestamp_t) + sizeof (Data_t) + expected_inline_qos_size, NN_XMSG_KIND_DATA)) == NULL)
+  if ((*pmsg = nn_xmsg_new (gv->xmsgpool, &wr->e.guid, wr->c.pp, sizeof (InfoTimestamp_t) + sizeof (Data_t) + expected_inline_qos_size, NN_XMSG_KIND_DATA)) == NULL)
     return DDS_RETCODE_OUT_OF_RESOURCES;
 
 #ifdef DDSI_INCLUDE_NETWORK_PARTITIONS
@@ -448,9 +449,9 @@ static dds_return_t create_fragment_message_simple (struct writer *wr, seqno_t s
 
 #if TEST_KEYHASH
   if (serdata->kind != SDK_KEY || !wr->include_keyhash)
-    nn_xmsg_serdata (*pmsg, serdata, 0, ddsi_serdata_size (serdata));
+    nn_xmsg_serdata (*pmsg, serdata, 0, ddsi_serdata_size (serdata), wr);
 #else
-  nn_xmsg_serdata (*pmsg, serdata, 0, ddsi_serdata_size (serdata));
+  nn_xmsg_serdata (*pmsg, serdata, 0, ddsi_serdata_size (serdata), wr);
 #endif
   nn_xmsg_submsg_setnext (*pmsg, sm_marker);
   return 0;
@@ -497,7 +498,7 @@ dds_return_t create_fragment_message (struct writer *wr, seqno_t seq, const stru
   fragging = (gv->config.fragment_size < size);
 
   /* INFO_TS: 12 bytes, DataFrag_t: 36 bytes, expected inline QoS: 32 => should be single chunk */
-  if ((*pmsg = nn_xmsg_new (gv->xmsgpool, &wr->e.guid.prefix, sizeof (InfoTimestamp_t) + sizeof (DataFrag_t) + expected_inline_qos_size, xmsg_kind)) == NULL)
+  if ((*pmsg = nn_xmsg_new (gv->xmsgpool, &wr->e.guid, wr->c.pp, sizeof (InfoTimestamp_t) + sizeof (DataFrag_t) + expected_inline_qos_size, xmsg_kind)) == NULL)
     return DDS_RETCODE_OUT_OF_RESOURCES;
 
 #ifdef DDSI_INCLUDE_NETWORK_PARTITIONS
@@ -618,13 +619,22 @@ dds_return_t create_fragment_message (struct writer *wr, seqno_t seq, const stru
     }
   }
 
-  nn_xmsg_serdata (*pmsg, serdata, fragstart, fraglen);
+  nn_xmsg_serdata (*pmsg, serdata, fragstart, fraglen, wr);
   nn_xmsg_submsg_setnext (*pmsg, sm_marker);
 #if 0
   GVTRACE ("queue data%s "PGUIDFMT" #%lld/%u[%u..%u)\n",
            fragging ? "frag" : "", PGUID (wr->e.guid),
            seq, fragnum+1, fragstart, fragstart + fraglen);
 #endif
+
+  encode_datawriter_submsg(*pmsg, sm_marker, wr);
+
+  /* It is possible that the encoding removed the submessage.
+   * If there is no content, free the message. */
+  if (nn_xmsg_size(*pmsg) == 0) {
+      nn_xmsg_free (*pmsg);
+      *pmsg = NULL;
+  }
 
   return ret;
 }
@@ -635,7 +645,7 @@ static void create_HeartbeatFrag (struct writer *wr, seqno_t seq, unsigned fragn
   struct nn_xmsg_marker sm_marker;
   HeartbeatFrag_t *hbf;
   ASSERT_MUTEX_HELD (&wr->e.lock);
-  if ((*pmsg = nn_xmsg_new (gv->xmsgpool, &wr->e.guid.prefix, sizeof (HeartbeatFrag_t), NN_XMSG_KIND_CONTROL)) == NULL)
+  if ((*pmsg = nn_xmsg_new (gv->xmsgpool, &wr->e.guid, wr->c.pp, sizeof (HeartbeatFrag_t), NN_XMSG_KIND_CONTROL)) == NULL)
     return; /* ignore out-of-memory: HeartbeatFrag is only advisory anyway */
 #ifdef DDSI_INCLUDE_NETWORK_PARTITIONS
   nn_xmsg_setencoderid (*pmsg, wr->partition_id);
@@ -664,6 +674,15 @@ static void create_HeartbeatFrag (struct writer *wr, seqno_t seq, unsigned fragn
   hbf->count = ++wr->hbfragcount;
 
   nn_xmsg_submsg_setnext (*pmsg, sm_marker);
+  encode_datawriter_submsg(*pmsg, sm_marker, wr);
+
+  /* It is possible that the encoding removed the submessage.
+   * If there is no content, free the message. */
+  if (nn_xmsg_size(*pmsg) == 0)
+  {
+    nn_xmsg_free(*pmsg);
+    *pmsg = NULL;
+  }
 }
 
 #if 0
