@@ -78,7 +78,7 @@ CU_Test(ddsc_config, simple_udp, .init = ddsrt_init, .fini = ddsrt_fini) {
     dds_delete(participant);
 }
 
-CU_Test(ddsc_config, user_config, .init = ddsrt_init, .fini = ddsrt_fini) {
+CU_Test(ddsc_config, user_config, .init = ddsrt_init, .fini = ddsrt_fini, .disabled=true) {
 
     CU_ASSERT_FATAL(dds_create_domain(1,
          "<"DDS_PROJECT_NAME"><Domain><Id>any</Id></Domain>"
@@ -106,7 +106,7 @@ CU_Test(ddsc_config, user_config, .init = ddsrt_init, .fini = ddsrt_fini) {
     dds_delete(participant_1);
 }
 
-CU_Test(ddsc_config, incorrect_config, .init = ddsrt_init, .fini = ddsrt_fini) {
+CU_Test(ddsc_config, incorrect_config, .init = ddsrt_init, .fini = ddsrt_fini, .disabled=true) {
 
     CU_ASSERT_FATAL(dds_create_domain(1, NULL) == DDS_RETCODE_BAD_PARAMETER);
     CU_ASSERT_FATAL(dds_create_domain(1, "<CycloneDDS incorrect XML") != DDS_RETCODE_OK);

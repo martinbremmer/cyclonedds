@@ -15,9 +15,248 @@
 
 #include "dds/ddsrt/misc.h"
 #include "dds/ddsrt/heap.h"
+#include "dds/ddsrt/string.h"
+#include "dds/ddsrt/process.h"
 
 #include "dds/ddsi/q_unused.h"
 #include "dds/ddsi/ddsi_security_omg.h"
+#include "dds/ddsi/ddsi_sertopic.h"
+
+
+#define MOCK_PAYLOAD
+#define MOCK_SUBMSG
+#define MOCK_RTPS
+
+//#define MOCK_TRACE
+
+
+#define SEC_BODY_SMID       0x30
+#define SEC_PREFIX_SMID     0x31
+#define SEC_POSTFIX_SMID    0x32
+#define SRTPS_PREFIX_SMID   0x33
+#define SRTPS_POSTFIX_SMID  0x34
+
+
+
+#define PAYLOAD_PREFIX_DUMMY { 1, 2, 3, 4 }
+
+
+
+#define SUBMSG_PREFIX_MOCK { SEC_PREFIX_SMID,                                      \
+                             0x01,         /* endianess */                         \
+                             0x04, 0x00,   /* payload size */                      \
+                             0x02,         /* payload: origin indication */        \
+                             0x00,         /* payload: original SMID */            \
+                             0x00, 0x00 }  /* payload: padding */
+
+#define SUBMSG_PREFIX_ORIGIN_DATAWRITER  0x01
+#define SUBMSG_PREFIX_ORIGIN_DATAREADER  0x02
+
+#define SUBMSG_PREFIX_SET_ORIGIN(submsg, origin) submsg[4] = origin
+#define SUBMSG_PREFIX_GET_ORIGIN(submsg)         submsg[4]
+
+#define SUBMSG_PREFIX_SET_SMID(submsg, smid)     submsg[5] = smid
+#define SUBMSG_PREFIX_GET_SMID(submsg)           submsg[5]
+
+#define SUBMSG_PREFIX_END(submsg)                &(submsg[8])
+
+#define SUBMSG_POSTFIX_MOCK { SEC_POSTFIX_SMID,                                     \
+                              0x01,         /* endianess */                         \
+                              0x04, 0x00,   /* payload size */                      \
+                              0x00, 0x00,   /* payload: dummy */                    \
+                              0x00, 0x00 }  /* payload: dummy */
+
+#define SUBMSG_GET_SIZE(submsg) (unsigned short)((((unsigned short)submsg[3]) << 8) + ((unsigned short)submsg[2]) + 4)
+
+
+#define RTPS_HEADER_MOCK   { SRTPS_PREFIX_SMID,                                    \
+                             0x01,         /* endianess */                         \
+                             0x04, 0x00,   /* payload size */                      \
+                             0x02,         /* payload: origin indication */        \
+                             0x00,         /* payload: original SMID */            \
+                             0x00, 0x00 }  /* payload: padding */
+
+#define RTPS_PREFIX_MOCK   { SRTPS_PREFIX_SMID,                                    \
+                             0x01,         /* endianess */                         \
+                             0x00, 0x00 }  /* payload size */
+
+#define RTPS_POSTFIX_MOCK  { SRTPS_POSTFIX_SMID,                                   \
+                             0x01,         /* endianess */                         \
+                             0x00, 0x00 }  /* payload size */
+
+
+static void
+mock_rtps_encoding(
+  const unsigned char  *src_buf,
+  const unsigned int    src_len,
+  unsigned char       **dst_buf,
+  unsigned int         *dst_len)
+{
+  unsigned char prefix_hdr[] = RTPS_PREFIX_MOCK;
+  unsigned char postfix[]    = RTPS_POSTFIX_MOCK;
+  unsigned char *ptr;
+
+  /* Prepare dest buffer. */
+  *dst_len = (unsigned int)(sizeof(Header_t) + sizeof(prefix_hdr) + src_len + sizeof(postfix));
+  *dst_buf = ddsrt_malloc(*dst_len);
+
+  /* Fill dest buffer. */
+  ptr = *dst_buf;
+  /* RTPS Header. */
+  memcpy(ptr, src_buf, sizeof(Header_t));
+  ptr += sizeof(Header_t);
+  /* Prefix that includes the original message. */
+  prefix_hdr[2] = (unsigned char)(src_len & 0xFF);
+  prefix_hdr[3] = (unsigned char)((src_len & 0xFF00) >> 8);
+  memcpy(ptr, prefix_hdr, sizeof(prefix_hdr));
+  ptr += sizeof(prefix_hdr);
+  memcpy(ptr, src_buf, src_len);
+  ptr += src_len;
+  /* Postfix */
+  memcpy(ptr, postfix, sizeof(postfix));
+}
+
+static void
+mock_rtps_decoding(
+  const unsigned char  *src_buf,
+  const unsigned int    src_len,
+  unsigned char       **dst_buf,
+  unsigned int         *dst_len)
+{
+  const unsigned char *prefix = &(src_buf[sizeof(Header_t)]);
+  (void)src_len;
+
+  /* Get original message buffer. */
+  *dst_len = (unsigned int)((int)(prefix[2]) | ((int)(prefix[3]) << 8));
+  *dst_buf = ddsrt_memdup(&(prefix[4]), *dst_len);
+}
+
+static void
+mock_submessage_encoding(
+  const unsigned char  *src_buf,
+  const unsigned int    src_len,
+  unsigned char       **dst_buf,
+  unsigned int         *dst_len,
+  unsigned char         origin)
+{
+  unsigned char postfix [] = SUBMSG_POSTFIX_MOCK;
+
+  /* Prepare the prefix. */
+  unsigned char prefix  [] = SUBMSG_PREFIX_MOCK;
+  SUBMSG_PREFIX_SET_ORIGIN(prefix, origin);
+  SUBMSG_PREFIX_SET_SMID(prefix, src_buf[0]);
+
+  /* Prepare destination buffer. */
+  *dst_len = (unsigned int)(sizeof(prefix) + src_len + sizeof(postfix));
+  *dst_buf = ddsrt_malloc(*dst_len);
+
+  /* Add prefix. */
+  memcpy(*dst_buf, prefix, sizeof(prefix));
+
+  /* Copy/transform data into body. */
+  memcpy(&((*dst_buf)[sizeof(prefix)]), src_buf, src_len);
+  (*dst_buf)[sizeof(prefix)] = SEC_BODY_SMID;
+
+  /* Add postfix. */
+  memcpy(&((*dst_buf)[(*dst_len) - sizeof(postfix)]), postfix, sizeof(postfix));
+}
+
+static void
+mock_submessage_decoding(
+  const unsigned char  *src_buf,
+  const unsigned int    src_len,
+  unsigned char       **dst_buf,
+  unsigned int         *dst_len)
+{
+  const unsigned char *data = SUBMSG_PREFIX_END(src_buf);
+  unsigned short size = SUBMSG_GET_SIZE(data);
+
+  (void)src_len;
+
+  /* Prepare buffer. */
+  *dst_buf = ddsrt_malloc(size);
+  *dst_len = size;
+
+  /* Copy/transform data into body. */
+  memcpy(*dst_buf, data, size);
+  (*dst_buf)[0] = SUBMSG_PREFIX_GET_SMID(src_buf);
+}
+
+static void
+mock_payload_encoding(
+  const unsigned char  *src_buf,
+  const unsigned int    src_len,
+  unsigned char       **dst_buf,
+  unsigned int         *dst_len)
+{
+  unsigned char dummyhdr [] = PAYLOAD_PREFIX_DUMMY;
+
+  /* Prepare destination buffer. */
+  *dst_len = (unsigned int)(sizeof(dummyhdr) + src_len);
+  *dst_buf = ddsrt_malloc(*dst_len);
+
+  /* Add prefix. */
+  memcpy(*dst_buf, dummyhdr, sizeof(dummyhdr));
+
+  /* Copy payload. */
+  memcpy(&((*dst_buf)[sizeof(dummyhdr)]), src_buf, src_len);
+}
+
+static void
+mock_payload_decoding(
+  const unsigned char  *src_buf,
+  const unsigned int    src_len,
+  unsigned char       **dst_buf,
+  unsigned int         *dst_len)
+{
+  unsigned char dummyhdr [] = PAYLOAD_PREFIX_DUMMY;
+
+  /* Prepare destination buffer. */
+  *dst_len = (unsigned int)(src_len - sizeof(dummyhdr));
+  *dst_buf = ddsrt_malloc(*dst_len);
+
+  /* Get payload. */
+  memcpy(*dst_buf, &(src_buf[sizeof(dummyhdr)]), *dst_len);
+}
+
+static bool
+q_omg_writer_is_payload_protected(
+    const struct writer *wr);
+
+static bool
+maybe_rtps_protected(
+  ddsi_entityid_t entityid)
+{
+  bool result = false;
+
+  if (!is_builtin_entityid(entityid, NN_VENDORID_ECLIPSE))
+  {
+    //printf("maybe_rtps_protected(0x%x): not builtin\n", entityid.u);
+    result = true;
+  }
+  else
+  {
+    switch (entityid.u)
+    {
+      case NN_ENTITYID_SEDP_BUILTIN_PUBLICATIONS_SECURE_WRITER:
+      case NN_ENTITYID_SEDP_BUILTIN_PUBLICATIONS_SECURE_READER:
+      case NN_ENTITYID_SEDP_BUILTIN_SUBSCRIPTIONS_SECURE_WRITER:
+      case NN_ENTITYID_SEDP_BUILTIN_SUBSCRIPTIONS_SECURE_READER:
+      case NN_ENTITYID_P2P_BUILTIN_PARTICIPANT_MESSAGE_SECURE_WRITER:
+      case NN_ENTITYID_P2P_BUILTIN_PARTICIPANT_MESSAGE_SECURE_READER:
+      case NN_ENTITYID_SPDP_RELIABLE_BUILTIN_PARTICIPANT_SECURE_WRITER:
+      case NN_ENTITYID_SPDP_RELIABLE_BUILTIN_PARTICIPANT_SECURE_READER:
+        //printf("maybe_rtps_protected(0x%x): secure builtin\n", entityid.u);
+        result = false /* true */;
+        break;
+      default:
+        //printf("maybe_rtps_protected(0x%x): builtin\n", entityid.u);
+        result = false;
+        break;
+    }
+  }
+  return result;
+}
 
 
 static bool endpoint_is_DCPSParticipantSecure(const ddsi_guid_t *guid)
@@ -66,7 +305,7 @@ static bool endpoint_is_DCPSParticipantVolatileMessageSecure(const ddsi_guid_t *
 bool
 q_omg_security_enabled(void)
 {
-  return false;
+  return true;
 }
 
 bool
@@ -75,7 +314,7 @@ q_omg_participant_is_secure(
 {
   /* TODO: Register local participant. */
   DDSRT_UNUSED_ARG(pp);
-  return false;
+  return true;
 }
 
 static bool
@@ -105,9 +344,18 @@ q_omg_get_writer_security_info(
   assert(info);
   /* TODO: Register local writer. */
   DDSRT_UNUSED_ARG(wr);
+
   info->plugin_security_attributes = 0;
-  info->security_attributes = 0;
-  return false;
+  if (q_omg_writer_is_payload_protected(wr))
+  {
+    info->security_attributes = NN_ENDPOINT_SECURITY_ATTRIBUTES_FLAG_IS_VALID|
+                                NN_ENDPOINT_SECURITY_ATTRIBUTES_FLAG_IS_PAYLOAD_PROTECTED;
+  }
+  else
+  {
+    info->security_attributes = 0;
+  }
+  return true;
 }
 
 bool
@@ -130,15 +378,25 @@ q_omg_proxyparticipant_is_authenticated(
 {
   /* TODO: Handshake */
   DDSRT_UNUSED_ARG(proxy_pp);
-  return false;
+  return true;
 }
 
 int64_t
-q_omg_security_get_local_participant_handle(struct participant *pp)
+q_omg_security_get_local_participant_handle(
+  struct participant *pp)
 {
   /* TODO: Local registration */
   DDSRT_UNUSED_ARG(pp);
-  return 0;
+  return 1;
+}
+
+int64_t
+q_omg_security_get_remote_participant_handle(
+  struct proxy_participant *proxypp)
+{
+  /* TODO: Handshake */
+  DDSRT_UNUSED_ARG(proxypp);
+  return 1;
 }
 
 unsigned
@@ -194,10 +452,16 @@ q_omg_security_is_remote_rtps_protected(
   struct proxy_participant *proxy_pp,
   ddsi_entityid_t entityid)
 {
+  bool ret = maybe_rtps_protected(entityid);
   /* TODO: Handshake */
   DDSRT_UNUSED_ARG(proxy_pp);
   DDSRT_UNUSED_ARG(entityid);
-  return false;
+#ifdef MOCK_RTPS
+  //printf("q_omg_security_is_remote_rtps_protected: %s\n", ret ? "yes" : "no");
+#else
+  ret = false;
+#endif
+  return ret;
 }
 
 bool
@@ -205,10 +469,16 @@ q_omg_security_is_local_rtps_protected(
   struct participant *pp,
   ddsi_entityid_t entityid)
 {
+  bool ret = maybe_rtps_protected(entityid);
   /* TODO: Handshake */
   DDSRT_UNUSED_ARG(pp);
   DDSRT_UNUSED_ARG(entityid);
-  return false;
+#ifdef MOCK_RTPS
+  //printf("q_omg_security_is_local_rtps_protected: %s\n", ret ? "yes" : "no");
+#else
+  ret = false;
+#endif
+  return ret;
 }
 
 void
@@ -335,12 +605,12 @@ q_omg_get_proxy_reader_security_info(
   const nn_plist_t *plist,
   nn_security_info_t *info)
 {
-    assert(prd);
-    assert(prd->c.proxypp);
-    q_omg_get_proxy_endpoint_security_info(&(prd->e),
-                                           &(prd->c.proxypp->security_info),
-                                           plist,
-                                           info);
+  assert(prd);
+  assert(prd->c.proxypp);
+  q_omg_get_proxy_endpoint_security_info(&(prd->e),
+                                         &(prd->c.proxypp->security_info),
+                                         plist,
+                                         info);
 }
 
 void
@@ -349,12 +619,12 @@ q_omg_get_proxy_writer_security_info(
   const nn_plist_t *plist,
   nn_security_info_t *info)
 {
-    assert(pwr);
-    assert(pwr->c.proxypp);
-    q_omg_get_proxy_endpoint_security_info(&(pwr->e),
-                                           &(pwr->c.proxypp->security_info),
-                                           plist,
-                                           info);
+  assert(pwr);
+  assert(pwr->c.proxypp);
+  q_omg_get_proxy_endpoint_security_info(&(pwr->e),
+                                         &(pwr->c.proxypp->security_info),
+                                         plist,
+                                         info);
 }
 
 
@@ -373,10 +643,12 @@ q_omg_security_encode_datareader_submessage(
   DDSRT_UNUSED_ARG(src_buf);
   DDSRT_UNUSED_ARG(src_len);
 
-  *dst_buf = NULL;
-  *dst_len = 0;
+  mock_submessage_encoding(src_buf, src_len, dst_buf, dst_len, SUBMSG_PREFIX_ORIGIN_DATAREADER);
+#ifdef MOCK_TRACE
+  printf("%s: src_len(%d)->dst_len(%d)\n", __FUNCTION__, (int)src_len, (int)*dst_len);
+#endif
 
-  return false;
+  return true;
 }
 
 static bool
@@ -394,10 +666,12 @@ q_omg_security_encode_datawriter_submessage(
   DDSRT_UNUSED_ARG(src_buf);
   DDSRT_UNUSED_ARG(src_len);
 
-  *dst_buf = NULL;
-  *dst_len = 0;
+  mock_submessage_encoding(src_buf, src_len, dst_buf, dst_len, SUBMSG_PREFIX_ORIGIN_DATAWRITER);
+#ifdef MOCK_TRACE
+  printf("%s: src_len(%d)->dst_len(%d)\n", __FUNCTION__, (int)src_len, (int)*dst_len);
+#endif
 
-  return false;
+  return true;
 }
 
 bool
@@ -415,10 +689,12 @@ q_omg_security_decode_submessage(
   DDSRT_UNUSED_ARG(src_buf);
   DDSRT_UNUSED_ARG(src_len);
 
-  *dst_buf = NULL;
-  *dst_len = 0;
+  mock_submessage_decoding(src_buf, src_len, dst_buf, dst_len);
+#ifdef MOCK_TRACE
+  printf("%s: src_len(%d)->dst_len(%d)\n", __FUNCTION__, (int)src_len, (int)*dst_len);
+#endif
 
-  return false;
+  return true;
 }
 
 static bool
@@ -434,10 +710,12 @@ q_omg_security_encode_serialized_payload(
   DDSRT_UNUSED_ARG(src_buf);
   DDSRT_UNUSED_ARG(src_len);
 
-  *dst_buf = NULL;
-  *dst_len = 0;
+  mock_payload_encoding(src_buf, src_len, dst_buf, dst_len);
+#ifdef MOCK_TRACE
+  printf("%s: src_len(%d)->dst_len(%d)\n", __FUNCTION__, (int)src_len, (int)*dst_len);
+#endif
 
-  return false;
+  return true;
 }
 
 bool
@@ -453,10 +731,12 @@ q_omg_security_decode_serialized_payload(
   DDSRT_UNUSED_ARG(src_buf);
   DDSRT_UNUSED_ARG(src_len);
 
-  *dst_buf = NULL;
-  *dst_len = 0;
+  mock_payload_decoding(src_buf, src_len, dst_buf, dst_len);
+#ifdef MOCK_TRACE
+  printf("%s: src_len(%d)->dst_len(%d)\n", __FUNCTION__, (int)src_len, (int)*dst_len);
+#endif
 
-  return false;
+  return true;
 }
 
 bool
@@ -476,10 +756,12 @@ q_omg_security_encode_rtps_message(
   DDSRT_UNUSED_ARG(src_len);
   DDSRT_UNUSED_ARG(dst_handle);
 
-  *dst_buf = NULL;
-  *dst_len = 0;
+  mock_rtps_encoding(src_buf, src_len, dst_buf, dst_len);
+#ifdef MOCK_TRACE
+  printf("%s: src_len(%d)->dst_len(%d)\n", __FUNCTION__, (int)src_len, (int)*dst_len);
+#endif
 
-  return false;
+  return true;
 }
 
 bool
@@ -495,35 +777,67 @@ q_omg_security_decode_rtps_message(
   DDSRT_UNUSED_ARG(src_buf);
   DDSRT_UNUSED_ARG(src_len);
 
-  *dst_buf = NULL;
-  *dst_len = 0;
+  mock_rtps_decoding(src_buf, src_len, dst_buf, dst_len);
+#ifdef MOCK_TRACE
+  printf("%s: src_len(%d)->dst_len(%d)\n", __FUNCTION__, (int)src_len, (int)*dst_len);
+#endif
 
-  return false;
+  return true;
 }
 
 static bool
 q_omg_writer_is_payload_protected(
-  struct writer *wr)
+  const struct writer *wr)
 {
+  bool ret = false;
   /* TODO: Local registration. */
   DDSRT_UNUSED_ARG(wr);
-  return false;
+#ifdef MOCK_PAYLOAD
+  const char *name = "no_topic";
+  if (wr->topic)
+  {
+    if (wr->topic->name)
+    {
+      name = wr->topic->name;
+      ret = true;
+    }
+    else
+    {
+      name = "no_name";
+    }
+  }
+  (void)name;
+  //printf("%s(%s:%s)\n", __FUNCTION__, name, ret ? "protected" : "plain");
+#endif
+  return ret;
 }
 
 static bool
 q_omg_writer_is_submessage_protected(
   struct writer *wr)
 {
+  /* TODO: Local registration. */
   DDSRT_UNUSED_ARG(wr);
+#ifdef MOCK_SUBMSG
+  //printf("%s(yes)\n", __FUNCTION__);
+  return true;
+#else
   return false;
+#endif
 }
 
 static bool
 q_omg_reader_is_submessage_protected(
   struct reader *rd)
 {
+  /* TODO: Local registration. */
   DDSRT_UNUSED_ARG(rd);
+#ifdef MOCK_SUBMSG
+  //printf("%s(yes)\n", __FUNCTION__);
+  return true;
+#else
   return false;
+#endif
 }
 
 bool

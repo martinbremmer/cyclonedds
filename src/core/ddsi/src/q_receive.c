@@ -3288,7 +3288,7 @@ check_rtps_message_is_secure(
   return ret;
 }
 
-static nn_rtps_msg_state_t decode_rtps_message(struct q_globals *gv, struct nn_rmsg **rmsg, Header_t **hdr, unsigned char **buff, ssize_t *sz, struct nn_rbufpool *rbpool, bool isstream)
+static nn_rtps_msg_state_t decode_rtps_message(struct thread_state1 * const ts1, struct q_globals *gv, struct nn_rmsg **rmsg, Header_t **hdr, unsigned char **buff, ssize_t *sz, struct nn_rbufpool *rbpool, bool isstream)
 {
   nn_rtps_msg_state_t ret = NN_RTPS_MSG_STATE_ERROR;
   struct proxy_participant *proxypp = NULL;
@@ -3301,7 +3301,7 @@ static nn_rtps_msg_state_t decode_rtps_message(struct q_globals *gv, struct nn_r
    * This could be optimized by providing a pre-allocated nn_rmsg buffer to
    * copy the decoded rtps message in.
    */
-
+  thread_state_awake_fixed_domain (ts1);
   ret = check_rtps_message_is_secure(gv, *hdr, *buff, isstream, &proxypp);
   if (ret == NN_RTPS_MSG_STATE_ENCODED)
   {
@@ -3338,6 +3338,7 @@ static nn_rtps_msg_state_t decode_rtps_message(struct q_globals *gv, struct nn_r
       ret = NN_RTPS_MSG_STATE_ERROR;
     }
   }
+  thread_state_asleep (ts1);
   return ret;
 }
 
@@ -3450,7 +3451,14 @@ static bool do_packet (struct thread_state1 * const ts1, struct q_globals *gv, d
         GVTRACE ("HDR(%"PRIx32":%"PRIx32":%"PRIx32" vendor %d.%d) len %lu from %s\n",
                  PGUIDPREFIX (hdr->guid_prefix), hdr->vendorid.id[0], hdr->vendorid.id[1], (unsigned long) sz, addrstr);
       }
-      nn_rtps_msg_state_t res = decode_rtps_message(gv, &rmsg, &hdr, &buff, &sz, rbpool, conn->m_stream);
+      nn_rtps_msg_state_t res = decode_rtps_message(ts1,
+                                                    gv,
+                                                    &rmsg,
+                                                    &hdr,
+                                                    &buff,
+                                                    &sz,
+                                                    rbpool,
+                                                    conn->m_stream);
 
       if (res != NN_RTPS_MSG_STATE_ERROR)
       {

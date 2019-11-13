@@ -50,6 +50,9 @@ bool q_omg_proxyparticipant_is_authenticated(const struct proxy_participant *pro
 /* TODO: Add header. */
 int64_t q_omg_security_get_local_participant_handle(struct participant *pp);
 
+/* TODO: Add header. */
+int64_t q_omg_security_get_remote_participant_handle(struct proxy_participant *proxypp);
+
 /**
  * @brief Get security info flags of the given writer.
  *
