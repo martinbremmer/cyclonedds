@@ -218,6 +218,13 @@ struct nn_xmsg *writer_hbcontrol_create_heartbeat (struct writer *wr, const stru
     add_Heartbeat (msg, wr, whcst, hbansreq, prd_guid->entityid, issync);
   }
 
+  /* It is possible that the encoding removed the submessage(s). */
+  if (nn_xmsg_size(msg) == 0)
+  {
+    nn_xmsg_free (msg);
+    msg = NULL;
+  }
+
   writer_hbcontrol_note_hb (wr, tnow, hbansreq);
   return msg;
 }

@@ -901,7 +901,13 @@ static void handle_xevk_acknack (struct nn_xpack *xp, struct xevent *ev, nn_mtim
       rwn->hb_timestamp.v = 0;
     }
     add_AckNack (msg, pwr, rwn, &nack_seq);
-    if (nack_seq)
+    if (nn_xmsg_size(msg) == 0)
+    {
+      /* No AckNack added. */
+      nn_xmsg_free(msg);
+      msg = NULL;
+    }
+    else if (nack_seq)
     {
       rwn->t_last_nack = tnow;
       rwn->seq_last_nack = nack_seq;

@@ -27,6 +27,9 @@
 #define MOCK_SUBMSG
 #define MOCK_RTPS
 
+//#define MOCK_DECODE_FAILURE
+//#define MOCK_ENCODE_FAILURE
+
 //#define MOCK_TRACE
 
 
@@ -44,10 +47,23 @@
 
 #define SUBMSG_PREFIX_MOCK { SEC_PREFIX_SMID,                                      \
                              0x01,         /* endianess */                         \
-                             0x04, 0x00,   /* payload size */                      \
-                             0x02,         /* payload: origin indication */        \
+                             0x10, 0x00,   /* payload size */                      \
+                             0x00,         /* payload: origin indication */        \
                              0x00,         /* payload: original SMID */            \
-                             0x00, 0x00 }  /* payload: padding */
+                             0x00,         /* payload: original len (<256) */      \
+                             0x00,         /* payload: original prefix[ 0] */      \
+                             0x00,         /* payload: original prefix[ 1] */      \
+                             0x00,         /* payload: original prefix[ 2] */      \
+                             0x00,         /* payload: original prefix[ 3] */      \
+                             0x00,         /* payload: original prefix[ 4] */      \
+                             0x00,         /* payload: original prefix[ 5] */      \
+                             0x00,         /* payload: original prefix[ 6] */      \
+                             0x00,         /* payload: original prefix[ 7] */      \
+                             0x00,         /* payload: original prefix[ 8] */      \
+                             0x00,         /* payload: original prefix[ 9] */      \
+                             0x00,         /* payload: original prefix[10] */      \
+                             0x00,         /* payload: original prefix[11] */      \
+                             0x00}         /* payload: padding */
 
 #define SUBMSG_PREFIX_ORIGIN_DATAWRITER  0x01
 #define SUBMSG_PREFIX_ORIGIN_DATAREADER  0x02
@@ -58,7 +74,23 @@
 #define SUBMSG_PREFIX_SET_SMID(submsg, smid)     submsg[5] = smid
 #define SUBMSG_PREFIX_GET_SMID(submsg)           submsg[5]
 
-#define SUBMSG_PREFIX_END(submsg)                &(submsg[8])
+#define SUBMSG_PREFIX_SET_LEN(submsg, len)       submsg[6] = (unsigned char)len
+#define SUBMSG_PREFIX_GET_LEN(submsg)            submsg[6]
+
+#define SUBMSG_PREFIX_SET_PREFIX(submsg, s)      submsg[ 7] = s[ 0]; \
+                                                 submsg[ 8] = s[ 1]; \
+                                                 submsg[ 9] = s[ 2]; \
+                                                 submsg[10] = s[ 3]; \
+                                                 submsg[11] = s[ 4]; \
+                                                 submsg[12] = s[ 5]; \
+                                                 submsg[13] = s[ 6]; \
+                                                 submsg[14] = s[ 7]; \
+                                                 submsg[15] = s[ 8]; \
+                                                 submsg[16] = s[ 9]; \
+                                                 submsg[17] = s[10]; \
+                                                 submsg[18] = s[11];
+
+#define SUBMSG_PREFIX_END(submsg)                &(submsg[20])
 
 #define SUBMSG_POSTFIX_MOCK { SEC_POSTFIX_SMID,                                     \
                               0x01,         /* endianess */                         \
@@ -133,6 +165,7 @@ mock_rtps_decoding(
 
 static void
 mock_submessage_encoding(
+  const ddsi_guid_prefix_t *dst_prefix,
   const unsigned char  *src_buf,
   const unsigned int    src_len,
   unsigned char       **dst_buf,
@@ -145,6 +178,11 @@ mock_submessage_encoding(
   unsigned char prefix  [] = SUBMSG_PREFIX_MOCK;
   SUBMSG_PREFIX_SET_ORIGIN(prefix, origin);
   SUBMSG_PREFIX_SET_SMID(prefix, src_buf[0]);
+  SUBMSG_PREFIX_SET_LEN(prefix, src_len);
+  if (dst_prefix)
+  {
+    SUBMSG_PREFIX_SET_PREFIX(prefix, dst_prefix->s);
+  }
 
   /* Prepare destination buffer. */
   *dst_len = (unsigned int)(sizeof(prefix) + src_len + sizeof(postfix));
@@ -218,6 +256,30 @@ mock_payload_decoding(
   /* Get payload. */
   memcpy(*dst_buf, &(src_buf[sizeof(dummyhdr)]), *dst_len);
 }
+
+#if 0
+static void
+print_submsg(const unsigned char *buf, unsigned int len)
+{
+  unsigned short i;
+  unsigned short size = SUBMSG_GET_SIZE(buf);
+  printf("[%u] print_submsg(%p, %u)\n", (unsigned)ddsrt_getpid(), buf, len);
+  printf("[%u] Header:  0x%02x\n", (unsigned)ddsrt_getpid(), buf[0]);
+  printf("[%u] Flags:   0x%02x\n", (unsigned)ddsrt_getpid(), buf[1]);
+  printf("[%u] Length:  0x%02x%02x (%u)\n", (unsigned)ddsrt_getpid(), buf[2], buf[3], size - 4);
+  printf("[%u] Payload:", (unsigned)ddsrt_getpid());
+  for (i = 4; i < size; i++)
+  {
+    printf(" %02x", buf[i]);
+  }
+  printf("\n");
+  if (size < len)
+  {
+    print_submsg(&(buf[size]), len - size);
+  }
+  printf("\n");
+}
+#endif
 
 static bool
 q_omg_writer_is_payload_protected(
@@ -642,13 +704,18 @@ q_omg_security_encode_datareader_submessage(
   DDSRT_UNUSED_ARG(dst_prefix);
   DDSRT_UNUSED_ARG(src_buf);
   DDSRT_UNUSED_ARG(src_len);
-
-  mock_submessage_encoding(src_buf, src_len, dst_buf, dst_len, SUBMSG_PREFIX_ORIGIN_DATAREADER);
+  DDSRT_UNUSED_ARG(dst_buf);
+  DDSRT_UNUSED_ARG(dst_len);
+#ifdef MOCK_ENCODE_FAILURE
+  printf("%s: force failure\n", __FUNCTION__);
+  return false;
+#else
+  mock_submessage_encoding(dst_prefix, src_buf, src_len, dst_buf, dst_len, SUBMSG_PREFIX_ORIGIN_DATAREADER);
 #ifdef MOCK_TRACE
   printf("%s: src_len(%d)->dst_len(%d)\n", __FUNCTION__, (int)src_len, (int)*dst_len);
 #endif
-
   return true;
+#endif
 }
 
 static bool
@@ -665,13 +732,24 @@ q_omg_security_encode_datawriter_submessage(
   DDSRT_UNUSED_ARG(dst_prefix);
   DDSRT_UNUSED_ARG(src_buf);
   DDSRT_UNUSED_ARG(src_len);
-
-  mock_submessage_encoding(src_buf, src_len, dst_buf, dst_len, SUBMSG_PREFIX_ORIGIN_DATAWRITER);
+  DDSRT_UNUSED_ARG(dst_buf);
+  DDSRT_UNUSED_ARG(dst_len);
+#ifdef MOCK_ENCODE_FAILURE
+  printf("%s: force failure\n", __FUNCTION__);
+  return false;
+#else
+  mock_submessage_encoding(dst_prefix, src_buf, src_len, dst_buf, dst_len, SUBMSG_PREFIX_ORIGIN_DATAWRITER);
+#if 0
+  printf("[%u] q_omg_security_encode_datawriter_submessage Source\n", (unsigned)ddsrt_getpid());
+  print_submsg(src_buf, src_len);
+  printf("[%u] q_omg_security_encode_datawriter_submessage Destination\n", (unsigned)ddsrt_getpid());
+  print_submsg(*dst_buf, *dst_len);
+#endif
 #ifdef MOCK_TRACE
   printf("%s: src_len(%d)->dst_len(%d)\n", __FUNCTION__, (int)src_len, (int)*dst_len);
 #endif
-
   return true;
+#endif
 }
 
 bool
@@ -688,13 +766,24 @@ q_omg_security_decode_submessage(
   DDSRT_UNUSED_ARG(dst_prefix);
   DDSRT_UNUSED_ARG(src_buf);
   DDSRT_UNUSED_ARG(src_len);
-
+  DDSRT_UNUSED_ARG(dst_buf);
+  DDSRT_UNUSED_ARG(dst_len);
+#ifdef MOCK_DECODE_FAILURE
+  printf("%s: force failure\n", __FUNCTION__);
+  return false;
+#else
   mock_submessage_decoding(src_buf, src_len, dst_buf, dst_len);
+#if 0
+  printf("[%u] q_omg_security_decode_submessage Source\n", (unsigned)ddsrt_getpid());
+  print_submsg(src_buf, src_len);
+  printf("[%u] q_omg_security_decode_submessage Destination\n", (unsigned)ddsrt_getpid());
+  print_submsg(*dst_buf, *dst_len);
+#endif
 #ifdef MOCK_TRACE
   printf("%s: src_len(%d)->dst_len(%d)\n", __FUNCTION__, (int)src_len, (int)*dst_len);
 #endif
-
   return true;
+#endif
 }
 
 static bool
@@ -709,13 +798,18 @@ q_omg_security_encode_serialized_payload(
   DDSRT_UNUSED_ARG(wr);
   DDSRT_UNUSED_ARG(src_buf);
   DDSRT_UNUSED_ARG(src_len);
-
+  DDSRT_UNUSED_ARG(dst_buf);
+  DDSRT_UNUSED_ARG(dst_len);
+#ifdef MOCK_ENCODE_FAILURE
+  printf("%s: force failure\n", __FUNCTION__);
+  return false;
+#else
   mock_payload_encoding(src_buf, src_len, dst_buf, dst_len);
 #ifdef MOCK_TRACE
   printf("%s: src_len(%d)->dst_len(%d)\n", __FUNCTION__, (int)src_len, (int)*dst_len);
 #endif
-
   return true;
+#endif
 }
 
 bool
@@ -730,13 +824,18 @@ q_omg_security_decode_serialized_payload(
   DDSRT_UNUSED_ARG(pwr);
   DDSRT_UNUSED_ARG(src_buf);
   DDSRT_UNUSED_ARG(src_len);
-
+  DDSRT_UNUSED_ARG(dst_buf);
+  DDSRT_UNUSED_ARG(dst_len);
+#ifdef MOCK_DECODE_FAILURE
+  printf("%s: force failure\n", __FUNCTION__);
+  return false;
+#else
   mock_payload_decoding(src_buf, src_len, dst_buf, dst_len);
 #ifdef MOCK_TRACE
   printf("%s: src_len(%d)->dst_len(%d)\n", __FUNCTION__, (int)src_len, (int)*dst_len);
 #endif
-
   return true;
+#endif
 }
 
 bool
@@ -754,14 +853,19 @@ q_omg_security_encode_rtps_message(
   DDSRT_UNUSED_ARG(src_guid);
   DDSRT_UNUSED_ARG(src_buf);
   DDSRT_UNUSED_ARG(src_len);
+  DDSRT_UNUSED_ARG(dst_buf);
+  DDSRT_UNUSED_ARG(dst_len);
   DDSRT_UNUSED_ARG(dst_handle);
-
+#ifdef MOCK_ENCODE_FAILURE
+  printf("%s: force failure\n", __FUNCTION__);
+  return false;
+#else
   mock_rtps_encoding(src_buf, src_len, dst_buf, dst_len);
 #ifdef MOCK_TRACE
   printf("%s: src_len(%d)->dst_len(%d)\n", __FUNCTION__, (int)src_len, (int)*dst_len);
 #endif
-
   return true;
+#endif
 }
 
 bool
@@ -776,13 +880,18 @@ q_omg_security_decode_rtps_message(
   DDSRT_UNUSED_ARG(proxypp);
   DDSRT_UNUSED_ARG(src_buf);
   DDSRT_UNUSED_ARG(src_len);
-
+  DDSRT_UNUSED_ARG(dst_buf);
+  DDSRT_UNUSED_ARG(dst_len);
+#ifdef MOCK_DECODE_FAILURE
+  printf("%s: force failure\n", __FUNCTION__);
+  return false;
+#else
   mock_rtps_decoding(src_buf, src_len, dst_buf, dst_len);
 #ifdef MOCK_TRACE
   printf("%s: src_len(%d)->dst_len(%d)\n", __FUNCTION__, (int)src_len, (int)*dst_len);
 #endif
-
   return true;
+#endif
 }
 
 static bool
