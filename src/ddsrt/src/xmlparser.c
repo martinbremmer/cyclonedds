@@ -36,7 +36,7 @@ struct ddsrt_xmlp_state {
     size_t cbufmax; /* allocated size of cbuf (cbufn <= cbufmax) */
     size_t cbufmark; /* NORMARKER or marker position (cbufmark <= cbufp) for rewinding */
     int eof; /* fake EOF (for treating missing close tags as EOF) */
-    char *cbuf; /* parser input buffer */
+    unsigned char *cbuf; /* parser input buffer */
     FILE *fp; /* file to refill cbuf from, or NULL if parsing a string */
     int line; /* current line number */
     int prevline; /* line number at last token */
@@ -147,7 +147,7 @@ struct ddsrt_xmlp_state *ddsrt_xmlp_new_string (const char *string, void *varg, 
     st = ddsrt_malloc (sizeof (*st));
     st->cbufn = strlen (string);
     st->cbufmax = st->cbufn;
-    st->cbuf = (char *) string;
+    st->cbuf = (unsigned char *) string;
     st->fp = NULL;
     ddsrt_xmlp_new_common (st);
     ddsrt_xmlp_new_setCB (st, varg, cb);
@@ -198,7 +198,7 @@ static int make_chars_available (struct ddsrt_xmlp_state *st, size_t nmin)
             }
         }
         /* buffer is owned by caller if fp = NULL, and by us if fp != NULL */
-        if (st->cbufp + st->cbufmax < nmin) {
+        if (st->cbufmax < st->cbufp + nmin) {
             st->cbufmax = st->cbufp + nmin;
             st->cbuf = ddsrt_realloc (st->cbuf, st->cbufmax);
         }
@@ -239,7 +239,7 @@ static void rewind_to_input_marker (struct ddsrt_xmlp_state *st)
 
 static int next_char (struct ddsrt_xmlp_state *st)
 {
-    char c;
+    unsigned char c;
     if (!make_chars_available (st, 1)) {
         return TOK_EOF;
     }
@@ -500,7 +500,7 @@ static int skip_comment (struct ddsrt_xmlp_state *st)
     if (!peek_chars (st, "<!--", 1)) {
         return 0;
     }
-    while ((peek_char (st) != TOK_EOF && peek_char (st) != '-') || !peek_chars (st, "-->", 0)) {
+    while (peek_char (st) != TOK_EOF && (peek_char (st) != '-' || !peek_chars (st, "-->", 0))) {
         next_char (st);
     }
     if (peek_chars (st, "-->", 1)) {

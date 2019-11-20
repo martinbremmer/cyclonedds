@@ -166,7 +166,6 @@ DUPF(uint32);
 DU(natint);
 DU(natint_255);
 DUPF(participantIndex);
-DU(port);
 DU(dyn_port);
 DUPF(memsize);
 DU(duration_inf);
@@ -756,20 +755,20 @@ static const struct cfgelem sizing_cfgelems[] = {
 };
 
 static const struct cfgelem discovery_ports_cfgelems[] = {
-  { LEAF("Base"), 1, "7400", ABSOFF(port_base), 0, uf_port, 0, pf_uint,
+  { LEAF("Base"), 1, "7400", ABSOFF(ports.base), 0, uf_uint, 0, pf_uint,
     BLURB("<p>This element specifies the base port number (refer to the DDSI 2.1 specification, section 9.6.1, constant PB).</p>") },
-  { LEAF("DomainGain"), 1, "250", ABSOFF(port_dg), 0, uf_uint, 0, pf_uint,
+  { LEAF("DomainGain"), 1, "250", ABSOFF(ports.dg), 0, uf_uint, 0, pf_uint,
     BLURB("<p>This element specifies the domain gain, relating domain ids to sets of port numbers (refer to the DDSI 2.1 specification, section 9.6.1, constant DG).</p>") },
-  { LEAF("ParticipantGain"), 1, "2", ABSOFF(port_pg), 0, uf_uint, 0, pf_uint,
+  { LEAF("ParticipantGain"), 1, "2", ABSOFF(ports.pg), 0, uf_uint, 0, pf_uint,
     BLURB("<p>This element specifies the participant gain, relating p0, articipant index to sets of port numbers (refer to the DDSI 2.1 specification, section 9.6.1, constant PG).</p>") },
-  { LEAF("MulticastMetaOffset"), 1, "0", ABSOFF(port_d0), 0, uf_uint, 0, pf_uint,
+  { LEAF("MulticastMetaOffset"), 1, "0", ABSOFF(ports.d0), 0, uf_uint, 0, pf_uint,
     BLURB("<p>This element specifies the port number for multicast meta traffic (refer to the DDSI 2.1 specification, section 9.6.1, constant d0).</p>") },
-  { LEAF("UnicastMetaOffset"), 1, "10", ABSOFF(port_d1), 0, uf_uint, 0, pf_uint,
+  { LEAF("UnicastMetaOffset"), 1, "10", ABSOFF(ports.d1), 0, uf_uint, 0, pf_uint,
     BLURB("<p>This element specifies the port number for unicast meta traffic (refer to the DDSI 2.1 specification, section 9.6.1, constant d1).</p>") },
-  { LEAF("MulticastDataOffset"), 1, "1", ABSOFF(port_d2), 0, uf_uint, 0, pf_uint,
-    BLURB("<p>This element specifies the port number for multicast meta traffic (refer to the DDSI 2.1 specification, section 9.6.1, constant d2).</p>") },
-  { LEAF("UnicastDataOffset"), 1, "11", ABSOFF(port_d3), 0, uf_uint, 0, pf_uint,
-    BLURB("<p>This element specifies the port number for unicast meta traffic (refer to the DDSI 2.1 specification, section 9.6.1, constant d3).</p>") },
+  { LEAF("MulticastDataOffset"), 1, "1", ABSOFF(ports.d2), 0, uf_uint, 0, pf_uint,
+    BLURB("<p>This element specifies the port number for multicast data traffic (refer to the DDSI 2.1 specification, section 9.6.1, constant d2).</p>") },
+  { LEAF("UnicastDataOffset"), 1, "11", ABSOFF(ports.d3), 0, uf_uint, 0, pf_uint,
+    BLURB("<p>This element specifies the port number for unicast data traffic (refer to the DDSI 2.1 specification, section 9.6.1, constant d3).</p>") },
   END_MARKER
 };
 
@@ -844,6 +843,10 @@ static const struct cfgelem discovery_peers_cfgelems[] = {
 };
 
 static const struct cfgelem discovery_cfgelems[] = {
+  { LEAF("Tag"), 0, "", ABSOFF(domainTag), 0, uf_string, ff_free, pf_string,
+    BLURB("<p>String extension for domain id that remote participants must match to be discovered.</p>") },
+  { LEAF ("ExternalDomainId"), 1, "default", ABSOFF (extDomainId), 0, uf_maybe_int32, 0, pf_maybe_int32,
+    BLURB("<p>An override for the domain id, to be used in discovery and for determining the port number mapping. This allows creating multiple domains in a single process while making them appear as a single domain on the network.  The value \"default\" disables the override.</p>") },
   { LEAF("DSGracePeriod"), 1, "30 s", ABSOFF(ds_grace_period), 0, uf_duration_inf, 0, pf_duration,
     BLURB("<p>This setting controls for how long endpoints discovered via a Cloud discovery service will survive after the discovery service disappeared, allowing reconnect without loss of data when the discovery service restarts (or another instance takes over).</p>") },
   { GROUP("Peers", discovery_peers_cfgelems),
@@ -983,7 +986,9 @@ static const struct cfgelem root_cfgelems[] = {
 };
 
 static const struct cfgelem root_cfgattrs[] = {
+  { ATTR("xmlns"), 0, "", 0, 0, 0, uf_nop, 0, pf_nop, NULL },
   { ATTR("xmlns:xsi"), 0, "", 0, 0, 0, uf_nop, 0, pf_nop, NULL },
+  { ATTR("xsi:schemaLocation"), 0, "", 0, 0, 0, uf_nop, 0, pf_nop, NULL },
   { ATTR("xsi:noNamespaceSchemaLocation"), 0, "", 0, 0, 0, uf_nop, 0, pf_nop, NULL },
   END_MARKER
 };
@@ -2045,32 +2050,21 @@ static enum update_result uf_natint_255(struct cfgst *cfgst, void *parent, struc
 
 static enum update_result uf_uint (struct cfgst *cfgst, void *parent, struct cfgelem const * const cfgelem, UNUSED_ARG (int first), const char *value)
 {
-  unsigned * const elem = cfg_address (cfgst, parent, cfgelem);
+  uint32_t * const elem = cfg_address (cfgst, parent, cfgelem);
   char *endptr;
   unsigned long v = strtoul (value, &endptr, 10);
   if (*value == 0 || *endptr != 0)
     return cfg_error (cfgst, "%s: not a decimal integer", value);
-  if (v != (unsigned) v)
+  if (v != (uint32_t) v)
     return cfg_error (cfgst, "%s: value out of range", value);
-  *elem = (unsigned) v;
+  *elem = (uint32_t) v;
   return URES_SUCCESS;
 }
 
 static void pf_uint (struct cfgst *cfgst, void *parent, struct cfgelem const * const cfgelem, uint32_t sources)
 {
-  unsigned const * const p = cfg_address (cfgst, parent, cfgelem);
+  uint32_t const * const p = cfg_address (cfgst, parent, cfgelem);
   cfg_logelem (cfgst, sources, "%u", *p);
-}
-
-static enum update_result uf_port(struct cfgst *cfgst, void *parent, struct cfgelem const * const cfgelem, int first, const char *value)
-{
-  int *elem = cfg_address (cfgst, parent, cfgelem);
-  if (uf_uint (cfgst, parent, cfgelem, first, value) != URES_SUCCESS)
-    return URES_ERROR;
-  else if (*elem < 1 || *elem > 65535)
-    return cfg_error (cfgst, "%s: out of range", value);
-  else
-    return URES_SUCCESS;
 }
 
 static enum update_result uf_duration_gen (struct cfgst *cfgst, void *parent, struct cfgelem const * const cfgelem, const char *value, int64_t def_mult, int64_t min_ns, int64_t max_ns)
@@ -2996,12 +2990,7 @@ struct cfgst *config_init (const char *config, struct config *cfg, uint32_t domi
     while (p)
     {
       cfgst->cfg->nof_networkPartitions++;
-      /* also use crc32 just like native nw and ordinary ddsi2e, only
-         for interoperability because it is asking for trouble &
-         forces us to include a crc32 routine when we have md5
-         available anyway */
       p->partitionId = cfgst->cfg->nof_networkPartitions; /* starting at 1 */
-      p->partitionHash = crc32_calc(p->name, strlen(p->name));
       p = p->next;
     }
   }
