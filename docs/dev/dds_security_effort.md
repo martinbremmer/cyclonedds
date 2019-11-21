@@ -10,11 +10,12 @@ DDS Security to Cyclone DDS.
 This document can be removed when DDS Security has been implemented.
 
 **Table of contents**
+- [Definition of done](#done)
 - [Footprint](#footprint)
 - [Multi process testing (done)](#testing)
 - [Runtime library loading (done)](#loading)
 - [Hopscotch utility (done)](#hopscotch)
-- [FSM utility](#fsm)
+- [FSM utility (in progress)](#fsm)
 - [Port DDS Security plugin API (done)](#port-api)
 - [De-Serializing messages in DDSI (done)](#deserializing)
 - [De-Serializing security message parameters in DDSI (done)](#deserializing_plist)
@@ -26,6 +27,16 @@ This document can be removed when DDS Security has been implemented.
 - [Example](#example)
 - [QosProvider](#qosprovider)
 - [Data Tags (optional)](#datatags)
+
+
+## Definition of done<a name="done" />
+
+When this document tells that a certain aspect is 'done', it means that it
+has been accepted into the security branch of the cyclonedds repository
+(https://github.com/eclipse-cyclonedds/cyclonedds/tree/security).
+
+However, it is possible that various parts need some rework before the security
+branch can be merged into the cyclonedds master branch.
 
 
 ## Footprint<a name="footprint" />
@@ -70,7 +81,7 @@ Both versions on OpenSplice and Cyclone are equivalent.<br>
 No additional effort is expected.
 
 
-## FSM utility<a name="fsm" />
+## FSM utility (in progress)<a name="fsm" />
 
 The Finite State Machine utility has been introduced in OpenSplice to support
 the handshake of DDS Security.<br>
@@ -136,8 +147,8 @@ porting effort is expected (i.e. let it work with cmake and runner generation).
 This means some additional effort, compared to just a code drop. But it is not
 expected to be major.
 
-- Authentication plugin (in progress)
-- Access Control plugin (todo)
+- Authentication plugin (done)
+- Access Control plugin (in progress)
 - Cryptography plugin (in progress)
 
 
@@ -173,16 +184,16 @@ That porting shouldn't be that hard. However, it will probably take a while.
 
 The DDSI Port doesn't have to be a big bang. It can be split up into various
 different pull requests. Examples are
-- Extend configuration XML parsing with the security configuration (in progress).
+- Extend configuration XML parsing with the security configuration (done).
 - Extend nn_qos with security related policies. Fill them with values from the
-  configuration when applicable (in progress).
-- Add DDS Security endpoints that are non-volatile (in progress).
+  configuration when applicable (done).
+- Add DDS Security endpoints that are non-volatile (done).
 - Add DDS Security endpoint that is volatile. This change has more impact than
   all the non-volatile endpoints combined (in progress).
 - Handshake.
-- Payload (en)(de)coding.
-- Submsg (en)(de)coding.
-- RTPSmsg (en)(de)coding.
+- Payload (en)(de)coding (in progress).
+- Submsg (en)(de)coding (in progress).
+- RTPSmsg (en)(de)coding (in progress).
 - Etc
 
 
